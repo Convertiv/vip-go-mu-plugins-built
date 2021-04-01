@@ -1,5 +1,6 @@
 {
   "name": "automattic/vip-go-mu-plugins",
+  "type": "wordpress-muplugin",
   "description": "The mu-plugins that power the VIP Go Platform",
   "require": {
     "php": "^7.2"
@@ -7,7 +8,7 @@
   "repositories": [
     {
       "type": "vcs",
-	  "url": "https://github.com/automattic/vip-go-mu-plugins-built"
-	}
+      "url": "https://github.com/automattic/vip-go-mu-plugins-built"
+    }
   ]
 }
