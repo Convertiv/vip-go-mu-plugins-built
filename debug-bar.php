@@ -1,13 +1,13 @@
 <?php
 /*
- Plugin Name: Debug Bar
- Plugin URI: https://wordpress.org/plugins/debug-bar/
- Description: Adds a debug menu to the admin bar that shows query, cache, and other helpful debugging information.
- Author: wordpressdotorg
- Version: 1.1.2
- Author URI: https://wordpress.org/
- Text Domain: debug-bar
- */
+Plugin Name: Debug Bar
+Plugin URI: https://wordpress.org/plugins/debug-bar/
+Description: Adds a debug menu to the admin bar that shows query, cache, and other helpful debugging information.
+Author: wordpressdotorg
+Version: 1.1.3
+Author URI: https://wordpress.org/
+Text Domain: debug-bar
+*/
 
 // If the user is an Automattician (typically a vip_support user), then force-enable Debug Bar.
 add_filter( 'debug_bar_enable', function( $enable ) {
@@ -23,30 +23,32 @@ add_filter( 'debug_bar_enable', function( $enable ) {
 }, PHP_INT_MAX );
 
 // We only need to load the files if it's enabled
-add_action( 'init', function() {
+add_action( 'set_current_user', function() {
 	$enable = apply_filters( 'debug_bar_enable', false );
 
 	if ( ! $enable ) {
 		return;
 	}
 
-	require_once( __DIR__ . '/debug-bar/debug-bar.php' );
+	if ( ! class_exists( 'Debug_Bar' ) ) {
+		require_once __DIR__ . '/debug-bar/debug-bar.php';
+	}
 
 	// Load additional plugins
 	if ( ! class_exists( 'ZT_Debug_Bar_Cron' ) ) {
-		require_once( __DIR__ . '/debug-bar-cron/debug-bar-cron.php' );
+		require_once __DIR__ . '/debug-bar-cron/debug-bar-cron.php';
 	}
 
 	// Setup extra panels
 	add_filter( 'debug_bar_panels', function( $panels ) {
-		require_once( __DIR__ . '/vip-helpers/vip-debug-bar-panels.php' );
-		require_once( __DIR__ . '/debug-bar/panels/class-debug-bar-elasticsearch.php' );
-		require_once( __DIR__ . '/debug-bar/panels/class-debug-bar-apc-cache-interceptor.php' );
+		require_once __DIR__ . '/vip-helpers/vip-debug-bar-panels.php';
+		require_once __DIR__ . '/debug-bar/panels/class-debug-bar-elasticsearch.php';
+		require_once __DIR__ . '/debug-bar/panels/class-debug-bar-apc-cache-interceptor.php';
 
 
 		$total = count( $panels );
 
-		for ( $i = 0; $i < $total; $i++) {
+		for ( $i = 0; $i < $total; $i++ ) {
 			if ( $panels[ $i ] instanceof Debug_Bar_Queries && function_exists( 'wpcom_vip_save_query_callback' ) ) {
 				$panels[ $i ] = new WPCOM_VIP_Debug_Bar_Queries();
 			} elseif ( $panels[ $i ] instanceof Debug_Bar_Object_Cache ) {
@@ -63,5 +65,5 @@ add_action( 'init', function() {
 		$panels[] = new WPCOM_Debug_Bar_Apcu_Hotcache();
 
 		return $panels;
-	}, 99);
+	}, 5 );
 }, 1 ); // Priority must be lower than that of Query Monitor

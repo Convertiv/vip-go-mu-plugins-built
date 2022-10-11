@@ -42,36 +42,37 @@ class Screen {
 	 * @since 3.0
 	 */
 	public function determine_screen() {
-		// If in network mode, don't output notice in admin and vice-versa.
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			if ( ! is_network_admin() ) {
-				return false;
-			}
-		} else {
-			if ( is_network_admin() ) {
-				return false;
-			}
-		}
+		// VIP: We removed the block about returning false depending on network admin or in network mode && not network admin
 
-		if ( ! empty( $_GET['page'] ) && false !== strpos( $_GET['page'], 'elasticpress' ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+		// phpcs:disable WordPress.Security.NonceVerification
+		if ( ! empty( $_GET['page'] ) && false !== strpos( $_GET['page'], 'elasticpress' ) ) {
 			$install_status = Installer::factory()->get_install_status();
 
 			$this->screen = 'install';
 
-			if ( 'elasticpress' === $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification
-				if ( ! isset( $_GET['install_complete'] ) && ( true === $install_status || isset( $_GET['do_sync'] ) ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+			if ( 'elasticpress' === $_GET['page'] ) {
+				if ( ! isset( $_GET['install_complete'] ) && ( true === $install_status || isset( $_GET['do_sync'] ) ) ) {
 					$this->screen = 'dashboard';
 				}
-			} elseif ( 'elasticpress-settings' === $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification
-				if ( true === $install_status || 2 === $install_status || isset( $_GET['do_sync'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+			} elseif ( 'elasticpress-settings' === $_GET['page'] ) {
+				if ( true === $install_status || 2 === $install_status || isset( $_GET['do_sync'] ) ) {
 					$this->screen = 'settings';
 				}
 			} elseif ( 'elasticpress-health' === $_GET['page'] ) {
 				if ( ! isset( $_GET['install_complete'] ) && ( true === $install_status || isset( $_GET['do_sync'] ) ) ) {
 					$this->screen = 'health';
 				}
+			} elseif ( 'elasticpress-weighting' === $_GET['page'] ) {
+				if ( ! isset( $_GET['install_complete'] ) && ( true === $install_status || isset( $_GET['do_sync'] ) ) ) {
+					$this->screen = 'weighting';
+				}
+			} elseif ( 'elasticpress-synonyms' === $_GET['page'] ) {
+				if ( ! isset( $_GET['install_complete'] ) && ( true === $install_status || isset( $_GET['do_sync'] ) ) ) {
+					$this->screen = 'synonyms';
+				}
 			}
 		}
+		// phpcs:enable WordPress.Security.NonceVerification
 	}
 
 	/**

@@ -43,10 +43,11 @@ class Meta_Updater {
 		$this->batch_size = $batch_size;
 
 		if ( $log_file ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fopen
 			$this->log_file = fopen( $log_file, 'w' );
 		}
 
-		$this->count = array_sum( ( array ) wp_count_posts( 'attachment' ) );
+		$this->count = array_sum( (array) wp_count_posts( 'attachment' ) );
 	}
 
 	/**
@@ -82,7 +83,8 @@ class Meta_Updater {
 
 		global $wpdb;
 
-		$this->max_id = (int) $wpdb->get_var( 'SELECT ID FROM ' . $wpdb->posts . ' ORDER BY ID DESC LIMIT 1' );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$this->max_id = (int) $wpdb->get_var( "SELECT ID FROM {$wpdb->posts} ORDER BY ID DESC LIMIT 1" );
 
 		return $this->max_id;
 	}
@@ -98,15 +100,16 @@ class Meta_Updater {
 	public function get_attachments( int $start_index = 0, int $end_index = 0 ): array {
 		global $wpdb;
 
-		$sql = $wpdb->prepare( 'SELECT ID FROM ' . $wpdb->posts . ' WHERE post_type = "attachment" AND ID BETWEEN %d AND %d',
-			$start_index, $end_index );
-		$attachments = $wpdb->get_col( $sql );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$attachments = $wpdb->get_col(
+			$wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'attachment' AND ID BETWEEN %d AND %d", $start_index, $end_index )
+		);
 
 		// Only return attachments without filesize
 		$filtered = [];
 		foreach ( $attachments as $attachment_id ) {
 			$meta = wp_get_attachment_metadata( $attachment_id );
-			if ( ( is_array( $meta ) && ! isset( $meta['filesize'] ) ) || '' === $meta ) {
+			if ( ( is_array( $meta ) && ! isset( $meta['filesize'] ) ) || empty( $meta ) ) {
 				$filtered[] = $attachment_id;
 			}
 		}
@@ -134,8 +137,9 @@ class Meta_Updater {
 			$counts[ $result ]++;
 
 			if ( $this->log_file ) {
+				// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.file_ops_fputcsv
 				fputcsv( $this->log_file, [
-					date( 'c' ),
+					gmdate( 'c' ),
 					$attachment_id,
 					$result,
 					$details,
@@ -171,7 +175,7 @@ class Meta_Updater {
 
 		$filesize = $this->get_filesize_from_file( $attachment_id );
 
-		if ( 0 >= $filesize ) {
+		if ( $filesize < 0 ) {
 			return [ 'fail-get-filesize', 'failed to get filesize' ];
 		}
 
@@ -197,11 +201,23 @@ class Meta_Updater {
 
 		$response = wp_remote_head( $attachment_url );
 		if ( is_wp_error( $response ) ) {
-			trigger_error( sprintf( '%s: failed to HEAD attachment %s because %s', __METHOD__, $attachment_url, $response->get_error_message() ), E_USER_WARNING );
-			return 0;
+			trigger_error( sprintf( '%s: failed to HEAD attachment %s because %s', __METHOD__, esc_html( $attachment_url ), esc_html( $response->get_error_message() ) ), E_USER_WARNING );
+			return -1;
 		}
 
-		return (int) wp_remote_retrieve_header( $response, 'Content-Length' );
+		$status = wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $status ) {
+			trigger_error( sprintf( '%s: HEAD attachment %s failed with HTTP error %d', __METHOD__, esc_html( $attachment_url ), (int) $status ), E_USER_WARNING );
+			return ( 404 === $status ) ? 0 : -1;
+		}
+
+		$length = wp_remote_retrieve_header( $response, 'Content-Length' );
+		if ( is_numeric( $length ) ) {
+			return (int) $length;
+		}
+
+		trigger_error( sprintf( '%s: HEAD attachment %s: no Content-Length present', __METHOD__, esc_html( $attachment_url ) ), E_USER_WARNING );
+		return -1;
 	}
 
 	/**

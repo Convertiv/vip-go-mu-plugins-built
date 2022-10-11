@@ -4,8 +4,8 @@ namespace Automattic\VIP\Files;
 
 use WP_Error;
 
-require( __DIR__ . '/class-curl-streamer.php' );
-require( __DIR__ . '/class-api-cache.php' );
+require __DIR__ . '/class-curl-streamer.php';
+require __DIR__ . '/class-api-cache.php';
 
 function new_api_client() {
 	return new API_Client(
@@ -30,11 +30,11 @@ class API_Client {
 	private $cache;
 
 	public function __construct( $api_base, $files_site_id, $files_token, $cache ) {
-		$api_base = untrailingslashit( $api_base );
+		$api_base       = untrailingslashit( $api_base );
 		$this->api_base = $api_base;
 
 		$this->files_site_id = $files_site_id;
-		$this->files_token = $files_token;
+		$this->files_token   = $files_token;
 
 		// Add some context to the UA to simplify debugging issues
 		if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
@@ -63,7 +63,7 @@ class API_Client {
 	private function call_api( $path, $method, $request_args = [] ) {
 		$is_valid_path = $this->is_valid_path( $path );
 		if ( ! $is_valid_path ) {
-			/* translators 1: file path */
+			/* translators: 1: file path */
 			return new WP_Error( 'invalid-path', sprintf( __( 'The specified file path (`%s`) does not begin with `/wp-content/uploads/`.' ), $path ) );
 		}
 
@@ -71,7 +71,7 @@ class API_Client {
 
 		$headers = [
 			'X-Client-Site-ID' => $this->files_site_id,
-			'X-Access-Token' => $this->files_token,
+			'X-Access-Token'   => $this->files_token,
 		];
 
 		if ( isset( $request_args['headers'] ) ) {
@@ -110,20 +110,18 @@ class API_Client {
 		clearstatcache( false, $local_path );
 
 		$file_size = filesize( $local_path );
-		$file_name = basename( $local_path );
-		$file_info = wp_check_filetype( $file_name );
-		$file_mime = $file_info['type'] ?? '';
+		$file_mime = self::detect_mime_type( $local_path );
 
 		$request_timeout = $this->calculate_upload_timeout( $file_size );
 
-		$curl_streamer = new Curl_Streamer( $local_path );
+		$curl_streamer = new Curl_Streamer( $local_path );  // phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_streamer
 		$curl_streamer->init();
 
 		$response = $this->call_api( $upload_path, 'PUT', [
 			'headers' => [
-				'Content-Type' => $file_mime,
+				'Content-Type'   => $file_mime,
 				'Content-Length' => $file_size,
-				'Connection' => 'Keep-Alive',
+				'Connection'     => 'Keep-Alive',
 			],
 			'timeout' => $request_timeout,
 		] );
@@ -169,6 +167,29 @@ class API_Client {
 		return self::DEFAULT_REQUEST_TIMEOUT + intval( $file_size / ( 500 * KB_IN_BYTES ) );
 	}
 
+	private static function detect_mime_type( string $filename ): string {
+		/**
+		 * `wp_check_filetype()` indirectly calls `wp_get_current_user()`, which is loaded from `pluggable.php`
+		 * `pluggable.php` is loaded after all plugins. Therefore, if a plugin creates a file under `wp-content/uploads`
+		 * before `pluggable.php` is loaded, we should not call `wp_check_filetype()` because it will generate
+		 * a fatal error.
+		 */
+		if ( function_exists( 'wp_get_current_user' ) ) {
+			$info = wp_check_filetype( $filename );
+			$mime = $info['type'] ?? '';
+		} else {
+			$mime = '';
+		}
+
+		if ( empty( $mime ) && extension_loaded( 'fileinfo' ) ) {
+			$finfo = finfo_open( FILEINFO_MIME_TYPE );
+			$mime  = finfo_file( $finfo, $filename );
+			finfo_close( $finfo );
+		}
+
+		return is_string( $mime ) ? $mime : '';
+	}
+
 	public function get_file( $file_path ) {
 		// check in cache first
 		$file = $this->cache->get_file( $file_path );
@@ -180,7 +201,7 @@ class API_Client {
 
 		// Request args for wp_remote_request()
 		$request_args = [
-			'stream' => true,
+			'stream'   => true,
 			'filename' => $tmp_file,
 		];
 
@@ -209,6 +230,7 @@ class API_Client {
 	public function get_file_content( $file_path ) {
 		$file = $this->get_file( $file_path );
 
+		// phpcs:ignore WordPressVIPMinimum.Performance.FetchingRemoteData.FileGetContentsUnknown -- the file is local
 		return file_get_contents( $file );
 	}
 
@@ -255,7 +277,7 @@ class API_Client {
 
 		if ( 200 === $response_code ) {
 			$response_body = wp_remote_retrieve_body( $response );
-			$info = json_decode( $response_body, true );
+			$info          = json_decode( $response_body, true );
 
 			// cache file info
 			$this->cache->cache_file_stats( $file_path, $info );
@@ -299,24 +321,34 @@ class API_Client {
 		}
 
 		$response_code = wp_remote_retrieve_response_code( $response );
+
+		if ( 503 === $response_code ) {
+			return new WP_Error(
+				'file-service-readonly',
+				__( 'Uploads are temporarily disabled due to platform maintenance. Please try again in a few minutes.' )
+			);
+		}
+
 		if ( 200 !== $response_code ) {
 			return new WP_Error( 'invalid-file-type',
+				// translators: 1 - file path, 2 - HTTP response code
 				sprintf( __( 'Failed to generate new unique file name `%1$s` (response code: %2$d)' ), $file_path, $response_code )
 			);
 		}
 
 		$content = wp_remote_retrieve_body( $response );
-		$obj = json_decode( $content );
+		$obj     = json_decode( $content );
 
 		return $obj->filename;
 	}
 
 	// Allow E_USER_NOTICE to be logged since WP blocks it by default.
+	// phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
 	private function allow_E_USER_NOTICE() {
 		static $updated_error_reporting = false;
 		if ( ! $updated_error_reporting ) {
-			$current_reporting_level = error_reporting();
-			error_reporting( $current_reporting_level | E_USER_NOTICE );
+			$current_reporting_level = error_reporting();                   // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_error_reporting
+			error_reporting( $current_reporting_level | E_USER_NOTICE );    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_error_reporting
 			$updated_error_reporting = true;
 		}
 	}
@@ -330,11 +362,12 @@ class API_Client {
 			$x_action = ' | X-Action:' . $request_args['headers']['X-Action'];
 		}
 
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_trigger_error
 		trigger_error(
 			sprintf( 'method:%s | path:%s%s #vip-go-streams-debug',
-				$method,
-				$path,
-				$x_action
+				esc_html( $method ),
+				esc_html( $path ),
+				esc_html( $x_action )
 			), E_USER_NOTICE
 		);
 	}

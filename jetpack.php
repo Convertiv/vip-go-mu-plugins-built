@@ -1,26 +1,33 @@
 <?php
 
-/*
- * Plugin Name: Jetpack by WordPress.com
+/**
+ * Plugin Name: Jetpack
  * Plugin URI: https://jetpack.com
- * Description: Bring the power of the WordPress.com cloud to your self-hosted WordPress. Jetpack enables you to connect your blog to a WordPress.com account to use the powerful features normally only available to WordPress.com users.
+ * Description: Security, performance, and marketing tools made by WordPress experts. Jetpack keeps your site protected so you can focus on more important things.
  * Author: Automattic
- * Version: 9.5
+ * Version: 11.4
  * Author URI: https://jetpack.com
  * License: GPL2+
  * Text Domain: jetpack
- * Domain Path: /languages/
+ * Requires at least: 5.7
+ * Requires PHP: 5.6
+ *
+ * @package automattic/jetpack
  */
 
 // Choose an appropriate default Jetpack version, ensuring that older WordPress versions
 // are not using a too modern Jetpack version that is not compatible with it
 if ( ! defined( 'VIP_JETPACK_DEFAULT_VERSION' ) ) {
-	if ( version_compare( $wp_version, '5.5', '<' ) ) {
-		define( 'VIP_JETPACK_DEFAULT_VERSION', '9.1' );
-	} elseif ( version_compare( $wp_version, '5.6', '<' ) ) {
+	if ( version_compare( $wp_version, '5.6', '<' ) ) {
 		define( 'VIP_JETPACK_DEFAULT_VERSION', '9.4' );
+	} elseif ( version_compare( $wp_version, '5.7', '<' ) ) {
+		define( 'VIP_JETPACK_DEFAULT_VERSION', '9.8' );
+	} elseif ( version_compare( $wp_version, '5.8', '<' ) ) {
+		define( 'VIP_JETPACK_DEFAULT_VERSION', '10.4' );
+	} elseif ( version_compare( $wp_version, '5.9', '<' ) ) {
+		define( 'VIP_JETPACK_DEFAULT_VERSION', '10.9' );
 	} else {
-		define( 'VIP_JETPACK_DEFAULT_VERSION', '9.5' );
+		define( 'VIP_JETPACK_DEFAULT_VERSION', '11.4' );
 	}
 }
 
@@ -31,8 +38,34 @@ if ( ! defined( 'JP_SITEMAP_BATCH_SIZE' ) ) {
 
 add_filter( 'jetpack_client_verify_ssl_certs', '__return_true' );
 
-if ( ! @constant( 'WPCOM_IS_VIP_ENV' ) ) {
-	add_filter( 'jetpack_is_staging_site', '__return_true' );
+/**
+ * Decide whether we need to enable JP staging mode, or prevent it.
+ *
+ * Mainly used to help prevent a site from accidentally taking over the connection
+ * of another site. Happens if the database is copied over and the "auth" keys are then shared.
+ *
+ * @see https://jetpack.com/support/staging-sites/
+ */
+function vip_toggle_jetpack_staging_mode() {
+	$is_vip_site = defined( 'WPCOM_IS_VIP_ENV' ) && constant( 'WPCOM_IS_VIP_ENV' );
+
+	if ( ! $is_vip_site ) {
+		// Default non-VIP sites to staging mode (likely local dev or custom staging).
+		add_filter( 'jetpack_is_staging_site', '__return_true' );
+		return;
+	}
+
+	$is_maintenance_mode = defined( 'WPCOM_VIP_SITE_MAINTENANCE_MODE' ) && WPCOM_VIP_SITE_MAINTENANCE_MODE;
+	$is_production_site  = defined( 'VIP_GO_APP_ENVIRONMENT' ) && 'production' === VIP_GO_APP_ENVIRONMENT;
+	if ( $is_maintenance_mode && ! $is_production_site ) {
+		// Specifically targetting data syncs here, we want to prevent Jetpack from contacting the site and potentially causing an identity crisis.
+		add_filter( 'jetpack_is_staging_site', '__return_true' );
+		return;
+	}
+
+	// By default, JP will set all non-production sites to staging. But on VIP, the preprod/develop sites should still have their own real connections.
+	// So we'll ensure here it's not set to staging mode since it will break SSO and prevent data from being passed to WPcom.
+	add_filter( 'jetpack_is_staging_site', '__return_false' );
 }
 
 /**
@@ -73,7 +106,7 @@ function vip_jetpack_token_send_signature_error_headers( $error ) {
 
 	header( sprintf(
 		'X-Jetpack-Signature-Error-Details: %s',
-		base64_encode( json_encode( $error_data['signature_details'] ) )
+		base64_encode( wp_json_encode( $error_data['signature_details'] ) )
 	) );
 }
 
@@ -108,17 +141,63 @@ function vip_jetpack_load() {
 
 	$jetpack_to_test[] = VIP_JETPACK_DEFAULT_VERSION;
 
+	// Because the versioned jetpack folders will live outside this repository, we want
+	// to have a backup to unversioned "jetpack" folder
+	$jetpack_to_test[] = '';
+
 	// Walk through all versions to test, and load the first one that exists
 	foreach ( $jetpack_to_test as $version ) {
 		if ( 'local' === $version ) {
 			$path = WPCOM_VIP_CLIENT_MU_PLUGIN_DIR . '/jetpack/jetpack.php';
+		} elseif ( '' === $version ) {
+			$path = WPMU_PLUGIN_DIR . '/jetpack/jetpack.php';
 		} else {
 			$path = WPMU_PLUGIN_DIR . "/jetpack-$version/jetpack.php";
 		}
 
 		if ( file_exists( $path ) ) {
-			require_once( $path );
-			define( 'VIP_JETPACK_LOADED_VERSION', $version );
+			// In a rare edge case, the plugin could be present in `active_plugins` option,
+			// That would lead to Jetpack Autoloader Guard trying to load autoloaders for `jetpack` and `jetpack-$version`
+			// This in turn would lead to a fatal error, when jetpack and jetpack-$version are the same version.
+			add_filter( 'option_active_plugins', function( $option ) {
+				if ( ! is_array( $option ) ) {
+					return $option;
+				}
+
+				foreach ( $option as $i => $plugin ) {
+					if ( wp_endswith( $plugin, '/jetpack.php' ) ) {
+						unset( $option[ $i ] );
+						break;
+					}
+				}
+				return $option;
+			} );
+
+			if ( is_multisite() ) {
+				// The same edge case as above, but for when Jetpack is network activated.
+				add_filter( 'site_option_active_sitewide_plugins', function( $option ) {
+					if ( ! is_array( $option ) ) {
+						return $option;
+					}
+
+					foreach ( $option as $plugin => $i ) {
+						if ( wp_endswith( $plugin, '/jetpack.php' ) ) {
+							unset( $option[ $plugin ] );
+							break;
+						}
+					}
+					return $option;
+				} );
+			}
+
+			require_once $path;
+			if ( class_exists( 'Jetpack' ) ) {
+				define( 'VIP_JETPACK_LOADED_VERSION', $version );
+			} else {
+				trigger_error( 'Jetpack could not be loaded and initialized due to a bootstrapping issue.', E_USER_WARNING );
+			}
+
+			// We should break even if we failed to load Jetpack, because some constants like JETPACK_VERSION were probably already set
 			break;
 		}
 	}
@@ -132,11 +211,18 @@ function vip_jetpack_load() {
 	 * We need Jetpack to be loaded as this has been deprecated in version 9.1, and if the filter is
 	 * added in that version or newer, a warning is shown on every WordPress request
 	 */
-	if ( version_compare( JETPACK__VERSION, '9.1', '<' ) ) {
+	if ( defined( 'JETPACK__VERSION' ) && version_compare( JETPACK__VERSION, '9.1', '<' ) ) {
 		add_filter( 'instagram_cache_oembed_api_response_body', '__return_true' );
+	}
+
+	if ( defined( 'VIP_JETPACK_LOADED_VERSION' ) && 'none' !== VIP_JETPACK_LOADED_VERSION ) {
+		// Configure the staging mode flag before we load the plugin, preventing any load order issues.
+		vip_toggle_jetpack_staging_mode();
+
+		require_once __DIR__ . '/vip-jetpack/vip-jetpack.php';
 	}
 }
 
-vip_jetpack_load();
-
-require_once( __DIR__ . '/vip-jetpack/vip-jetpack.php' );
+if ( ! defined( 'WP_INSTALLING' ) ) {
+	vip_jetpack_load();
+}

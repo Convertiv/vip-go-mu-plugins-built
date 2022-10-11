@@ -1,9 +1,9 @@
 === VaultPress ===
-Contributors: automattic, apokalyptik, briancolinger, josephscott, shaunandrews, xknown, thingalon, annezazu, rachelsquirrel
+Contributors: automattic, annezazu, apokalyptik, bjorsch, briancolinger, dsmart, georgestephanis, jeherve, josephscott, miguelxavierpenha, rachelsquirrel, rdcoll, sdixon194, shaunandrews, thingalon, viper007bond, williamvianas, xknown
 Tags: security, malware, virus, archive, back up, back ups, backup, backups, scanning, restore, wordpress backup, site backup, website backup
 Requires at least: 5.2
-Tested up to: 5.5
-Stable tag: 2.1.1
+Tested up to: 5.9
+Stable tag: 2.2.1
 Requires PHP: 5.6
 License: GPLv2
 
@@ -48,43 +48,12 @@ A VaultPress subscription is for a single WordPress site. You can purchase addit
 Yes, VaultPress supports Multisite installs. Each site will require its own subscription.
 
 == Changelog ==
+### 2.2.1 - 2022-02-01
+#### Changed
+- Colors: update colors to match the latest iterations of our brand.
+- General: update WordPress tested up to version, since the plugin works with WordPress 5.9.
 
-= 2.1.3 =
-
-* Release date: August 6, 2020
-
-** Compatibility **
-
-* General: Handle new user meta actions.
-* General: Implement the spread operator for our IXR class methods to match WordPress Core behavior in 5.5.
-* General: Update some miscellaneous dependencies.
-
-= 2.1.2 =
-
-* Release date: Not publicly released, all changes shipped in subsequent version instead.
-
-= 2.1.1 =
-
-* Release date: December 10, 2019
-
-**Compatibility**
-
-* General: the VaultPress plugin now requires PHP 5.6, just like WordPress.
-* General: avoid using PHP short array syntax to load plugin files.
-
-= 2.1 =
-
-* Release date: December 9, 2019
-
-**Compatibility**
-
-* General: avoid PHP deprecation notices when using a newer version of the Jetpack plugin.
-* Admin Page: do not display a dashboard link if not registered.
-* Admin Page: update reset settings card wording.
-* Connect button: update link to current VaultPress page.
-* Notices: only display notices in specific locations.
-* Notices: update wording for the VaultPress connection notice
 
 --------
 
-[See the previous changelogs here](https://raw.githubusercontent.com/Automattic/vaultpress/master/changelog.txt).
+[See the previous changelogs here](https://github.com/Automattic/jetpack/blob/master/projects/plugins/vaultpress/CHANGELOG.md#changelog)

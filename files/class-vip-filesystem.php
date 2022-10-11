@@ -100,6 +100,14 @@ class VIP_Filesystem {
 		add_filter( 'get_attached_file', [ $this, 'filter_get_attached_file' ], 20, 2 );
 		add_filter( 'wp_generate_attachment_metadata', [ $this, 'filter_wp_generate_attachment_metadata' ], 10, 2 );
 		add_filter( 'wp_read_image_metadata', [ $this, 'filter_wp_read_image_metadata' ], 10, 2 );
+
+		/**
+		 * The core's function recurse_dirsize would call to opendir() which is not supported by the
+		 * VIP File service and would always fail with Warning.
+		 *
+		 * To avoid this we will short-circuit the execution and return 0 as folder size.
+		 */
+		add_filter( 'pre_recurse_dirsize', '__return_zero' );
 	}
 
 	/**
@@ -117,6 +125,7 @@ class VIP_Filesystem {
 		remove_filter( 'get_attached_file', [ $this, 'filter_get_attached_file' ], 20 );
 		remove_filter( 'wp_generate_attachment_metadata', [ $this, 'filter_wp_generate_attachment_metadata' ] );
 		remove_filter( 'wp_read_image_metadata', [ $this, 'filter_wp_read_image_metadata' ], 10, 2 );
+		remove_filter( 'pre_recurse_dirsize', '__return_zero' );
 	}
 
 	/**
@@ -220,6 +229,7 @@ class VIP_Filesystem {
 
 		if ( is_wp_error( $result ) ) {
 			if ( 'invalid-file-type' !== $result->get_error_code() ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_trigger_error
 				trigger_error(
 					// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 					sprintf( '%s #vip-go-streams', $result->get_error_message() ),
@@ -271,6 +281,7 @@ class VIP_Filesystem {
 			return '';
 		}
 
+		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.file_ops_unlink
 		if ( ! unlink( $file_path ) ) {
 			return '';
 		}
@@ -300,12 +311,16 @@ class VIP_Filesystem {
 	 */
 	private function clean_file_path( $file_path ) {
 		$upload_path = wp_get_upload_dir();
+		$basedir     = $upload_path['basedir'];
+		$basedir_len = strlen( $basedir );
 
-		// Find 2nd occurrence of `basedir`
-		$pos = strpos( $file_path, $upload_path['basedir'], strlen( $upload_path['basedir'] ) );
-		if ( false !== $pos ) {
-			// +1 to account far trailing slash
-			$file_path = substr( $file_path, strlen( $upload_path['basedir'] ) + 1 );
+		// Find 2nd occurrence of `basedir`; `$file_path` should be at least twice as long as `basedir`
+		if ( strlen( $file_path ) >= 2 * $basedir_len ) {
+			$pos = strpos( $file_path, $basedir, $basedir_len );
+			if ( false !== $pos ) {
+				// +1 to account far trailing slash
+				$file_path = substr( $file_path, $basedir_len + 1 );
+			}
 		}
 
 		// Strip any query params that snuck through
@@ -319,7 +334,10 @@ class VIP_Filesystem {
 	}
 
 	/**
-	 * Filters the generated attachment metadata
+	 * Filters the generated attachment metadata and adds "filesize".
+	 *
+	 * WP 6.0+ will be handling this automatically.
+	 * @see https://core.trac.wordpress.org/ticket/49412
 	 *
 	 * @return array
 	 */
@@ -380,7 +398,7 @@ class VIP_Filesystem {
 		$invalidation_url = get_site_url() . $file_uri;
 
 		if ( ! \WPCOM_VIP_Cache_Manager::instance()->queue_purge_url( $invalidation_url ) ) {
-			// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped
+			// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped, WordPress.PHP.DevelopmentFunctions.error_log_trigger_error
 			trigger_error(
 				/* translators: invalidation url */
 				sprintf( __( 'Error purging %s from the cache service #vip-go-streams' ), $invalidation_url ),
@@ -434,11 +452,13 @@ class VIP_Filesystem {
 
 		// Save a local copy and read metadata from that
 		$temp_file = wp_tempnam();
+		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.file_ops_file_put_contents, WordPressVIPMinimum.Performance.FetchingRemoteData.FileGetContentsUnknown
 		file_put_contents( $temp_file, file_get_contents( $file ) );
 		$meta = wp_read_image_metadata( $temp_file );
 
 		add_filter( 'wp_read_image_metadata', [ $this, 'filter_wp_read_image_metadata' ], 10, 2 );
 
+		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.file_ops_unlink
 		unlink( $temp_file );
 
 		return $meta;

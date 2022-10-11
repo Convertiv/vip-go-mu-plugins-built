@@ -14,6 +14,7 @@ class Versioning {
 	const INDEX_VERSIONS_SELF_HEAL_LOCK_CACHE_GROUP          = 'vip_search';
 	const INDEX_VERSIONS_SELF_HEAL_LOCK_CACHE_TTL            = 10;
 	const INDEX_VERSIONS_SELF_HEAL_LOCK_CACHE_TTL_ON_FAILURE = 60 * 10; // 10 minutes
+	const INACTIVE_VERSION_JOB_DEFAULT_PRIORITY              = 15;
 
 	/**
 	 * The maximum number of index versions that can exist for any indexable.
@@ -211,39 +212,6 @@ class Versioning {
 		$slug = $indexable->slug;
 
 		if ( ! $this->versions_array_has_slug( $versions, $slug ) ) {
-
-			if ( Search::is_network_mode() ) {
-				// Check deprecated location
-				$deprecated_versions = get_site_option( self::INDEX_VERSIONS_OPTION, array() );
-
-				if ( $this->versions_array_has_slug( $deprecated_versions, $slug ) ) {
-					// Versions are only stored in the deprecated network storage
-					// TODO remove this deprecated check if it is not executed to simplify the code.
-
-					$message = sprintf(
-						"Application %d - %s found index versions in deprecated global storage for '%s' indexable. I will store versions in correct storage based on global flag.",
-						FILES_CLIENT_SITE_ID,
-						home_url(),
-						$slug
-					);
-
-					\Automattic\VIP\Logstash\log2logstash(
-						array(
-							'severity' => 'warning',
-							'feature'  => 'vip_search_versioning',
-							'message'  => $message,
-						)
-					);
-
-					$normalized_versions = array_map( array( $this, 'normalize_version' ), $deprecated_versions[ $slug ] );
-
-					// Store versions in correct place to avoid triggering this code again
-					$this->update_versions( $indexable, $normalized_versions );
-
-					return $normalized_versions;
-				}
-			}
-
 			if ( $provide_default ) {
 				return array(
 					1 => array(
@@ -406,8 +374,6 @@ class Versioning {
 	 * @return array Array of index versions
 	 */
 	public function get_version( Indexable $indexable, $version_number ) {
-		$slug = $indexable->slug;
-
 		$version_number = $this->normalize_version_number( $indexable, $version_number );
 
 		if ( is_wp_error( $version_number ) ) {
@@ -430,8 +396,6 @@ class Versioning {
 	 * @return bool Boolean indicating if the new version was successfully added or not
 	 */
 	public function add_version( Indexable $indexable ) {
-		$slug = $indexable->slug;
-
 		$versions = $this->get_versions( $indexable );
 
 		$new_version_number = $this->get_next_version_number( $versions );
@@ -531,7 +495,11 @@ class Versioning {
 		$new_version = null;
 
 		if ( ! empty( $versions ) && is_array( $versions ) ) {
-			$new_version = max( array_keys( $versions ) );
+			$versions = array_map( function ( $v ) {
+				return is_int( $v ) ? $v : 0;
+			}, array_keys( $versions ) );
+
+			$new_version = max( $versions );
 		}
 
 		// If site has no versions yet (1 version), the next version is 2
@@ -730,6 +698,8 @@ class Versioning {
 			// Other index versions, besides active
 			$inactive_versions = $this->get_inactive_versions( $indexable );
 
+			$queue = \Automattic\VIP\Search\Search::instance()->queue;
+
 			// There were changes for active version - now we need to loop over every object that was queued for the active version and replicate that job to the other versions
 			foreach ( $inactive_versions as $version ) {
 				$this->set_current_version_number( $indexable, $version['number'] );
@@ -741,7 +711,17 @@ class Versioning {
 					// Override the index version in the options
 					$options['index_version'] = $version['number'];
 
-					\Automattic\VIP\Search\Search::instance()->queue->queue_object( $object_id, $object_type, $options );
+					/**
+					 * Filter do determine the priority of the replication job
+					 *
+					 * @param int $priority         Priority
+					 * @param int $object_id        Object ID
+					 * @param string $object_type   Object type
+					 * @return int                  Priority
+					 */
+					$options['priority'] = apply_filters( 'vip_versioning_reindex_priority', self::INACTIVE_VERSION_JOB_DEFAULT_PRIORITY, $object_id, $object_type );
+
+					$queue->queue_object( $object_id, $object_type, $options );
 				}
 
 				$this->reset_current_version_number( $indexable );
@@ -764,13 +744,21 @@ class Versioning {
 			return $bail;
 		}
 
-		foreach ( $inactive_versions as $version ) {
-			foreach ( $sync_manager->sync_queue as $object_id => $value ) {
-				$options = array(
-					'index_version' => $version['number'],
-				);
+		$queue = \Automattic\VIP\Search\Search::instance()->queue;
 
-				\Automattic\VIP\Search\Search::instance()->queue->queue_object( $object_id, $indexable_slug, $options );
+		foreach ( $inactive_versions as $version ) {
+			$options = array(
+				'index_version' => $version['number'],
+			);
+
+			foreach ( $sync_manager->sync_queue as $object_id => $value ) {
+				/**
+				 * This filter is documented in Versioning::replicate_queued_objects_to_other_versions
+				 */
+				$priority            = apply_filters( 'vip_versioning_reindex_priority', self::INACTIVE_VERSION_JOB_DEFAULT_PRIORITY, $object_id, $indexable_slug );
+				$options['priority'] = $priority;
+
+				$queue->queue_object( $object_id, $indexable_slug, $options );
 			}
 		}
 
@@ -786,8 +774,11 @@ class Versioning {
 	 * since deletes are comparatively much less frequent, so the savings of preventing back-and-forth switching between
 	 * index versions is not as great. We also process the deletes immediately, b/c the queue system currently does not
 	 * support deletes (just indexing)
+	 *
+	 * NOTE 2 - we are passing 'post' as the default slug since EP 3.5 introduced `ep_delete_post` with only one
+	 * argument ($post_id)
 	 */
-	public function action__ep_delete_indexable( $object_id, $indexable_slug ) {
+	public function action__ep_delete_indexable( $object_id, $indexable_slug = 'post' ) {
 		// Prevent infinite loops :)
 		if ( $this->is_doing_object_delete ) {
 			return;
@@ -813,8 +804,10 @@ class Versioning {
 		foreach ( $inactive_versions as $version ) {
 			$this->set_current_version_number( $indexable, $version['number'] );
 
-			$indexable->delete( $object_id );
-
+			if ( $indexable->get( $object_id ) ) {
+				$indexable->delete( $object_id );
+			}
+			
 			$this->reset_current_version_number( $indexable );
 		}
 
@@ -833,7 +826,7 @@ class Versioning {
 			self::INDEX_VERSIONS_SELF_HEAL_LOCK_CACHE_KEY,
 			1,
 			self::INDEX_VERSIONS_SELF_HEAL_LOCK_CACHE_GROUP,
-			$ttl
+			$ttl    // phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
 		);
 	}
 
@@ -876,19 +869,16 @@ class Versioning {
 			} else {
 				$this->update_versions( $indexable, $versions );
 
-				$message = sprintf(
-					"Application %d - %s updated index versions for '%s' indexable",
-					FILES_CLIENT_SITE_ID,
-					home_url(),
-					$indexable->slug
-				);
-
 				\Automattic\VIP\Logstash\log2logstash(
 					array(
 						'severity' => 'info',
-						'feature'  => 'vip_search_versioning',
-						'message'  => $message,
-						'extra'    => $versions,
+						'feature'  => 'search_versioning',
+						'message'  => 'Recreated index versions for persistence',
+						'extra'    => [
+							'homeurl'   => home_url(),
+							'versions'  => $versions,
+							'indexable' => $indexable->slug,
+						],
 					)
 				);
 			}

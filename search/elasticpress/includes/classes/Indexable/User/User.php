@@ -129,7 +129,25 @@ class User extends Indexable {
 		 * Support `role` query arg
 		 */
 		if ( ! empty( $blog_id ) ) {
-			if ( ! empty( $query_vars['role'] ) ) {
+			// If a blog id is set, we will apply at least one filter for roles.
+			$use_filters = true;
+
+			// If there are no specific roles named, make sure the user is a member of the site.
+			if ( empty( $query_vars['role'] ) && empty( $query_vars['role__in'] ) && empty( $query_vars['role__not_in'] ) ) {
+				$filter['bool']['must'][]     = array(
+					'exists' => array(
+						'field' => 'capabilities.' . $blog_id . '.roles',
+					),
+				);
+				/**
+				 * EP versions prior to 4.1.0 set non-existent roles as `0`.
+				 */
+				$filter['bool']['must_not'][] = array(
+					'term' => array(
+						'capabilities.' . $blog_id . '.roles' => 0,
+					),
+				);
+			} elseif ( ! empty( $query_vars['role'] ) ) {
 				$roles = (array) $query_vars['role'];
 
 				foreach ( $roles as $role ) {
@@ -141,8 +159,6 @@ class User extends Indexable {
 						),
 					);
 				}
-
-				$use_filters = true;
 			} else {
 				if ( ! empty( $query_vars['role__in'] ) ) {
 					$roles_in = (array) $query_vars['role__in'];
@@ -170,8 +186,6 @@ class User extends Indexable {
 							),
 						);
 					}
-
-					$use_filters = true;
 				}
 			}
 		}
@@ -206,8 +220,6 @@ class User extends Indexable {
 
 		if ( ! empty( $meta_queries ) ) {
 			$filter['bool']['must'][] = $this->build_meta_query( $meta_queries );
-
-			$use_filters = true;
 		}
 
 		/**
@@ -640,25 +652,25 @@ class User extends Indexable {
 					);
 				} elseif ( 'display_name' === $orderby_clause || 'name' === $orderby_clause ) {
 					$sort[] = array(
-						'display_name' => array(
+						'display_name.sortable' => array(
 							'order' => $order,
 						),
 					);
 				} elseif ( 'user_nicename' === $orderby_clause || 'nicename' === $orderby_clause ) {
 					$sort[] = array(
-						'user_nicename' => array(
+						'user_nicename.raw' => array(
 							'order' => $order,
 						),
 					);
 				} elseif ( 'user_email' === $orderby_clause || 'email' === $orderby_clause ) {
 					$sort[] = array(
-						'user_email' => array(
+						'user_email.raw' => array(
 							'order' => $order,
 						),
 					);
 				} elseif ( 'user_url' === $orderby_clause || 'url' === $orderby_clause ) {
 					$sort[] = array(
-						'user_url' => array(
+						'user_url.raw' => array(
 							'order' => $order,
 						),
 					);
@@ -728,11 +740,15 @@ class User extends Indexable {
 			$args['order'] = 'desc';
 		}
 
+		$orderby_args = sanitize_sql_orderby( "{$args['orderby']} {$args['order']}" );
+		$orderby      = $orderby_args ? sprintf( 'ORDER BY %s', $orderby_args ) : '';
+
 		/**
 		 * WP_User_Query doesn't let us get users across all blogs easily. This is the best
 		 * way to do that.
 		 */
-		$objects = $wpdb->get_results( $wpdb->prepare( "SELECT SQL_CALC_FOUND_ROWS ID FROM {$wpdb->users} ORDER BY %s %s LIMIT %d, %d", $args['orderby'], $args['orderby'], (int) $args['offset'], (int) $args['number'] ) );
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$objects = $wpdb->get_results( $wpdb->prepare( "SELECT SQL_CALC_FOUND_ROWS ID FROM {$wpdb->users} {$orderby} LIMIT %d, %d", (int) $args['offset'], (int) $args['number'] ) );
 
 		return [
 			'objects'       => $objects,
@@ -880,11 +896,11 @@ class User extends Indexable {
 		$prepared_roles = [];
 
 		foreach ( $sites as $site ) {
-			$roles = get_user_meta( $user_id, $wpdb->get_blog_prefix( $site['blog_id'] ) . 'capabilities', true );
+			$roles = (array) get_user_meta( $user_id, $wpdb->get_blog_prefix( $site['blog_id'] ) . 'capabilities', true );
 
 			if ( ! empty( $roles ) ) {
 				$prepared_roles[ (int) $site['blog_id'] ] = [
-					'roles' => array_keys( $roles ),
+					'roles' => array_keys( (array) $roles ),
 				];
 			}
 		}
@@ -900,7 +916,15 @@ class User extends Indexable {
 	 * @return array
 	 */
 	public function prepare_meta( $user_id ) {
-		$meta = (array) get_user_meta( $user_id );
+		/**
+		 * Filter pre-prepare meta for a user
+		 *
+		 * @hook ep_prepare_user_meta_data
+		 * @param  {array} $meta Meta data
+		 * @param  {int} $user_id User ID
+		 * @return  {array} New meta
+		 */
+		$meta = apply_filters( 'ep_prepare_user_meta_data', (array) get_user_meta( $user_id ), $user_id );
 
 		if ( empty( $meta ) ) {
 			/**

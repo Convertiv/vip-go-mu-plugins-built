@@ -105,10 +105,10 @@ class Features {
 
 		$original_state = $feature->is_active();
 
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			$feature_settings = get_site_option( 'ep_feature_settings', [] );
-		} else {
-			$feature_settings = get_option( 'ep_feature_settings', [] );
+		// VIP: Every site should have its own option, rather than a network one.
+		$feature_settings = get_option( 'ep_feature_settings', [] );
+		if ( function_exists( 'vip_maybe_backfill_ep_option' ) ) { // TODO: Remove
+			$feature_settings = \vip_maybe_backfill_ep_option( $feature_settings, 'ep_feature_settings' );
 		}
 
 		if ( empty( $feature_settings[ $slug ] ) ) {
@@ -135,11 +135,8 @@ class Features {
 
 		$sanitize_feature_settings = apply_filters( 'ep_sanitize_feature_settings', $feature_settings, $feature );
 
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			update_site_option( 'ep_feature_settings', $sanitize_feature_settings );
-		} else {
-			update_option( 'ep_feature_settings', $sanitize_feature_settings );
-		}
+		// VIP: Every site should have its own option, rather than a network one.
+		update_option( 'ep_feature_settings', $sanitize_feature_settings );
 
 		$data = array(
 			'reindex' => false,
@@ -152,6 +149,23 @@ class Features {
 
 			$feature->post_activation();
 		}
+
+		/**
+		 * Fires after activating, inactivating, or just updating a feature.
+		 *
+		 * @hook ep_after_update_feature
+		 * @param  {string} $feature Feature slug
+		 * @param  {array} $settings Feature settings
+		 * @param  {array} $data Feature activation data
+		 *
+		 * @since 3.5.5
+		 */
+		do_action(
+			'ep_after_update_feature',
+			$slug,
+			$settings,
+			$data
+		);
 
 		return $data;
 	}
@@ -179,20 +193,24 @@ class Features {
 			$new_requirement_statuses[ $slug ] = (int) $status->code;
 		}
 
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			update_site_option( 'ep_feature_requirement_statuses', $new_requirement_statuses );
-		} else {
-			update_option( 'ep_feature_requirement_statuses', $new_requirement_statuses );
+		$is_wp_cli = defined( 'WP_CLI' ) && \WP_CLI;
+
+		if ( $is_wp_cli || is_admin() ) {
+			if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
+				update_site_option( 'ep_feature_requirement_statuses', $new_requirement_statuses );
+			} else {
+				update_option( 'ep_feature_requirement_statuses', $new_requirement_statuses );
+			}
 		}
 
 		/**
 		 * If feature settings aren't created, let's create them and finish
 		 */
 
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			$feature_settings = get_site_option( 'ep_feature_settings', false );
-		} else {
-			$feature_settings = get_option( 'ep_feature_settings', false );
+		// VIP: Every site should have its own option, rather than a network one.
+		$feature_settings = get_option( 'ep_feature_settings', false );
+		if ( function_exists( 'vip_maybe_backfill_ep_option' ) ) { // TODO: Remove
+			$feature_settings = \vip_maybe_backfill_ep_option( $feature_settings, 'ep_feature_settings' );
 		}
 
 		if ( false === $feature_settings ) {
@@ -214,7 +232,7 @@ class Features {
 		 * If a requirement status changes, we need to handle that by activating/deactivating/showing notification
 		 */
 
-		if ( ! empty( $old_requirement_statuses ) ) {
+		if ( ( $is_wp_cli || is_admin() ) && ! empty( $old_requirement_statuses ) ) {
 			foreach ( $new_requirement_statuses as $slug => $code ) {
 				$feature = $this->get_registered_feature( $slug );
 

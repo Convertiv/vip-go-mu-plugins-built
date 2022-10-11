@@ -8,6 +8,7 @@
 namespace ElasticPressTest;
 
 use ElasticPress;
+use ElasticPress\Indexables as Indexables;
 
 /**
  * Test post indexable class
@@ -59,6 +60,11 @@ class TestPost extends BaseTestCase {
 	public function tearDown() {
 		parent::tearDown();
 
+		// Unset current_screen so is_admin() is reset.
+		if ( isset( $GLOBALS['current_screen'] ) ) {
+			unset( $GLOBALS['current_screen'] );
+		}
+
 		// make sure no one attached to this
 		remove_filter( 'ep_sync_terms_allow_hierarchy', array( $this, 'ep_allow_multiple_level_terms_sync' ), 100 );
 		$this->fired_actions = array();
@@ -66,7 +72,7 @@ class TestPost extends BaseTestCase {
 
 	/**
 	 * Test the building of index mappings
-	 * 
+	 *
 	 * @since 3.6
 	 * @group post
 	 */
@@ -80,7 +86,7 @@ class TestPost extends BaseTestCase {
 
 	/**
 	 * Test the building of index settings
-	 * 
+	 *
 	 * @since 3.6
 	 * @group post
 	 */
@@ -222,11 +228,12 @@ class TestPost extends BaseTestCase {
 				'ep_integrate'   => true,
 				'posts_per_page' => 1,
 				'offset'         => 1,
-				'orderby'        => 'date',
 				'order'          => 'ASC',
+				'orderby'        => 'date',
 			)
 		);
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, count( $query->posts ) );
 		$this->assertEquals( 'two', $query->posts[0]->post_title );
 	}
@@ -256,7 +263,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
-		$this->assertTrue( ! empty( $this->fired_actions['ep_wp_query_search'] ) );
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$this->assertEquals( $query->post_count, 2 );
 		$this->assertEquals( $query->found_posts, 2 );
@@ -308,7 +315,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
-		$this->assertTrue( ! empty( $this->fired_actions['ep_wp_query_search'] ) );
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$this->assertEquals( $query->post_count, 3 );
 		$this->assertEquals( $query->found_posts, 3 );
@@ -609,6 +616,8 @@ class TestPost extends BaseTestCase {
 		add_action( 'ep_wp_query_search', array( $this, 'action_wp_query_search' ), 10, 0 );
 		$query = new \WP_Query( array( 's' => '#findme' ) );
 
+		$this->assertTrue( $query->elasticsearch_success );
+
 		$this->assertNotNull( $query->posts[0] );
 		$this->assertNotNull( $query->posts[0]->terms );
 		$post = $query->posts[0];
@@ -650,11 +659,12 @@ class TestPost extends BaseTestCase {
 
 		$args = array(
 			$tax_name => $term_1_name,
-			's'       => '',
+			'ep_integrate' => true
 		);
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -680,11 +690,12 @@ class TestPost extends BaseTestCase {
 
 		$args = array(
 			'category_name' => $term_1_name,
-			's'             => '',
+			'ep_integrate'  => true
 		);
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -708,12 +719,13 @@ class TestPost extends BaseTestCase {
 		ElasticPress\Elasticsearch::factory()->refresh_indices();
 
 		$args = array(
-			'tag' => $term_1_name,
-			's'   => '',
+			'tag'          => $term_1_name,
+			'ep_integrate' => true,
 		);
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -743,7 +755,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
-		$this->assertTrue( ! empty( $this->fired_actions['ep_wp_query_search'] ) );
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
@@ -775,6 +787,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, count( $query->posts ) );
 		$this->assertEquals( 3, $query->found_posts );
@@ -789,6 +802,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, count( $query->posts ) );
 		$this->assertEquals( 3, $query->found_posts );
@@ -803,6 +817,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, count( $query->posts ) );
 		$this->assertEquals( 3, $query->found_posts );
@@ -817,6 +832,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 0, $query->post_count );
 		$this->assertEquals( 0, count( $query->posts ) );
 		$this->assertEquals( 3, $query->found_posts );
@@ -866,6 +882,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -917,6 +934,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -972,6 +990,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -987,6 +1006,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1037,6 +1057,96 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
+		$this->assertEquals( 2, $query->post_count );
+		$this->assertEquals( 2, $query->found_posts );
+	}
+
+	/**
+	 * Test a taxonomy query with invalid terms
+	 *
+	 * @since 1.8
+	 * @group post
+	 */
+	public function testTaxQueryWithInvalidTerms() {
+		$post = Functions\create_and_sync_post(
+			array(
+				'post_content' => 'findme test 1',
+				'tags_input'   => array(
+					'one',
+					'two',
+				),
+			)
+		);
+		Functions\create_and_sync_post( array( 'post_content' => 'findme test 2' ) );
+		Functions\create_and_sync_post(
+			array(
+				'post_content' => 'findme test 3',
+				'tags_input'   => array(
+					'one',
+					'three',
+				),
+			)
+		);
+
+		$tags   = wp_get_post_tags( $post );
+		$tag_id = 0;
+
+		foreach ( $tags as $tag ) {
+			if ( 'one' === $tag->slug ) {
+				$tag_id = $tag->term_id;
+			}
+		}
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$args = array(
+			's'         => 'findme',
+			'tax_query' => array(
+				array(
+					'taxonomy' => 'post_tag',
+					'terms'    => array( $tag_id, null ),
+					'field'    => 'term_id',
+				),
+			),
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+		$this->assertEquals( 2, $query->post_count );
+		$this->assertEquals( 2, $query->found_posts );
+
+		$args = array(
+			's'         => 'findme',
+			'tax_query' => array(
+				array(
+					'taxonomy' => 'post_tag',
+					'terms'    => array( null, $tag_id, false ),
+					'field'    => 'term_id',
+				),
+			),
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+		$this->assertEquals( 2, $query->post_count );
+		$this->assertEquals( 2, $query->found_posts );
+
+		$args = array(
+			's'         => 'findme',
+			'tax_query' => array(
+				array(
+					'taxonomy' => 'post_tag',
+					'terms'    => array( $tag_id, null ),
+				),
+			),
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1080,6 +1190,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1106,6 +1217,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1132,6 +1244,65 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
+		$this->assertEquals( 2, $query->post_count );
+		$this->assertEquals( 2, $query->found_posts );
+	}
+
+	/**
+	 * Test a category__not_in query
+	 *
+	 * @since 3.6.0
+	 * @group post
+	 */
+	public function testCategoryNotInQuery() {
+		$term = wp_insert_term( 'cattest', 'category' );
+
+		$post_ids = array();
+
+		$post_ids[0] = Functions\create_and_sync_post( array( 'post_content' => 'findme cat not in test 1', 'post_category' => array( $term['term_id'] ) ) );
+		$post_ids[1] = Functions\create_and_sync_post( array( 'post_content' => 'findme cat not in test 2',  ) );
+		$post_ids[2] = Functions\create_and_sync_post( array( 'post_content' => 'findme cat not in test 3' ) );
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$args = array(
+			's'                => 'findme cat not in test',
+			'category__not_in' => array( $term['term_id'] ),
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+		$this->assertEquals( 2, $query->post_count );
+		$this->assertEquals( 2, $query->found_posts );
+	}
+
+	/**
+	 * Test a tag__not_in query
+	 *
+	 * @since 3.6.0
+	 * @group post
+	 */
+	public function testTagNotInQuery() {
+		$term = wp_insert_term( 'tagtest', 'post_tag' );
+
+		$post_ids = array();
+
+		$post_ids[0] = Functions\create_and_sync_post( array( 'post_content' => 'findme cat not in test 1', 'tags_input' => array( $term['term_id'] ) ) );
+		$post_ids[1] = Functions\create_and_sync_post( array( 'post_content' => 'findme cat not in test 2',  ) );
+		$post_ids[2] = Functions\create_and_sync_post( array( 'post_content' => 'findme cat not in test 3' ) );
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$args = array(
+			's'                => 'findme cat not in test',
+			'tag__not_in'      => array( $term['term_id'] ),
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1168,6 +1339,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1211,6 +1383,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 
@@ -1220,6 +1393,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1254,6 +1428,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1289,6 +1464,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -1318,6 +1494,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 	}
@@ -1352,6 +1529,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -1388,6 +1566,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -1429,6 +1608,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 
@@ -1482,13 +1662,14 @@ class TestPost extends BaseTestCase {
 
 		// post_type defaults to "any"
 		$args = array(
-			'post_type'              => 'attachment',
-			'post_status'            => 'any',
-			'elasticpress_integrate' => true,
+			'post_type'    => 'attachment',
+			'post_status'  => 'any',
+			'ep_integrate' => true,
 		);
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -1521,6 +1702,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -1555,6 +1737,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 	}
@@ -1578,6 +1761,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 
 		$this->assertEquals( 1, count( $query->posts[0]->meta['test_key'] ) );
@@ -1607,6 +1791,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -1621,20 +1806,24 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
 
 	/**
-	 * Test a query that fuzzy searches taxonomy terms
+	 * Test a query that fuzzy searches taxonomy terms for the 3.4 algorithm.
 	 *
 	 * @since 1.0
 	 * @group post
 	 */
 	public function testSearchTaxQuery() {
-		Functions\create_and_sync_post( array( 'post_content' => 'the post content' ) );
-		Functions\create_and_sync_post( array( 'post_content' => 'the post content findme' ) );
-		Functions\create_and_sync_post(
+		// TODO write a new test to match the 3.5 functionality.
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
+		$post_id_0 = Functions\create_and_sync_post( array( 'post_content' => 'the post content' ) );
+		$post_id_1 = Functions\create_and_sync_post( array( 'post_content' => 'the post content findme' ) );
+		$post_id_2 = Functions\create_and_sync_post(
 			array(
 				'post_content' => 'post content',
 				'tags_input'   => array( 'findme 2' ),
@@ -1642,6 +1831,7 @@ class TestPost extends BaseTestCase {
 		);
 
 		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
 		$args = array(
 			's'             => 'one findme two',
 			'search_fields' => array(
@@ -1654,8 +1844,17 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
+
+		$post_ids = wp_list_pluck( $query->posts, 'ID' );
+
+		$this->assertContains( $post_id_1, $post_ids );
+		$this->assertContains( $post_id_1, $post_ids );
+		$this->assertNotContains( $post_id_0, $post_ids );
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -1665,6 +1864,9 @@ class TestPost extends BaseTestCase {
 	 * @group post
 	 */
 	public function testSearchAuthorQuery() {
+
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
 		$user_id = $this->factory->user->create(
 			array(
 				'user_login' => 'john',
@@ -1695,8 +1897,11 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -1763,6 +1968,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -1788,6 +1994,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'ordertest 333', $query->posts[0]->post_title );
@@ -1816,6 +2023,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'ordertest 111', $query->posts[0]->post_title );
@@ -1844,6 +2052,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'ordertest 111', $query->posts[0]->post_title );
@@ -1890,6 +2099,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'ordertest 333', $query->posts[0]->post_title );
@@ -1951,6 +2161,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
@@ -2015,6 +2227,8 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
+
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 
@@ -2045,6 +2259,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 4, $query->post_count );
 		$this->assertEquals( 4, $query->found_posts );
 		$this->assertEquals( 'ordertest 111', $query->posts[0]->post_title );
@@ -2100,6 +2315,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 4, $query->post_count );
 		$this->assertEquals( 4, $query->found_posts );
 		$this->assertEquals( 'ordertest 111', $query->posts[0]->post_title );
@@ -2130,6 +2346,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 4, $query->post_count );
 		$this->assertEquals( 4, $query->found_posts );
 		$this->assertEquals( 'ordertest 111', $query->posts[3]->post_title );
@@ -2184,6 +2401,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 4, $query->post_count );
 		$this->assertEquals( 4, $query->found_posts );
 		$this->assertEquals( 'ordertest 111', $query->posts[0]->post_title );
@@ -2199,6 +2417,9 @@ class TestPost extends BaseTestCase {
 	 * @group post
 	 */
 	public function testSearchPostDateOrderbyQuery() {
+
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
 		Functions\create_and_sync_post( array( 'post_title' => 'ordertesr' ) );
 		sleep( 3 );
 
@@ -2217,11 +2438,14 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'Ordertest 222', $query->posts[0]->post_title );
 		$this->assertEquals( 'ordertest 111', $query->posts[1]->post_title );
 		$this->assertEquals( 'ordertesr', $query->posts[2]->post_title );
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -2248,6 +2472,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'Ordertest 222', $query->posts[0]->post_title );
@@ -2262,6 +2487,9 @@ class TestPost extends BaseTestCase {
 	 * @group post
 	 */
 	public function testSearchRelevanceOrderbyQueryAdvanced() {
+
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
 		$posts = array();
 
 		$posts[5] = Functions\create_and_sync_post( array( 'post_title' => 'ordertet with even more lorem ipsum to make a longer field' ) );
@@ -2298,6 +2526,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 6, $query->post_count );
 		$this->assertEquals( 6, $query->found_posts );
 
@@ -2307,6 +2536,8 @@ class TestPost extends BaseTestCase {
 
 			$i++;
 		}
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -2316,6 +2547,9 @@ class TestPost extends BaseTestCase {
 	 * @group post
 	 */
 	public function testSearchRelevanceOrderbyQuery() {
+
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
 		Functions\create_and_sync_post();
 		Functions\create_and_sync_post( array( 'post_title' => 'ordertet' ) );
 		Functions\create_and_sync_post( array( 'post_title' => 'ordertest' ) );
@@ -2329,10 +2563,13 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 		$this->assertEquals( 'ordertest', $query->posts[0]->post_title );
 		$this->assertEquals( 'ordertet', $query->posts[1]->post_title );
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -2356,6 +2593,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
 		$this->assertEquals( 'postname-ordertest-111', $query->posts[0]->post_name );
@@ -2372,6 +2610,9 @@ class TestPost extends BaseTestCase {
 	 * @group post
 	 */
 	public function testSearchDefaultOrderbyQuery() {
+
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
 		Functions\create_and_sync_post();
 		Functions\create_and_sync_post( array( 'post_title' => 'Ordertet' ) );
 		Functions\create_and_sync_post( array( 'post_title' => 'ordertest' ) );
@@ -2384,10 +2625,13 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 		$this->assertEquals( 'ordertest', $query->posts[0]->post_title );
 		$this->assertEquals( 'Ordertet', $query->posts[1]->post_title );
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -2399,6 +2643,9 @@ class TestPost extends BaseTestCase {
 	 * @group post
 	 */
 	public function testSearchDefaultOrderbyASCOrderQuery() {
+
+		add_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
+
 		Functions\create_and_sync_post();
 		Functions\create_and_sync_post( array( 'post_title' => 'Ordertest' ) );
 		Functions\create_and_sync_post( array( 'post_title' => 'ordertestt' ) );
@@ -2412,10 +2659,13 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 		$this->assertEquals( 'ordertestt', $query->posts[0]->post_title );
 		$this->assertEquals( 'Ordertest', $query->posts[1]->post_title );
+
+		remove_filter( 'ep_search_algorithm_version', array( $this, 'set_algorithm_34' ) );
 	}
 
 	/**
@@ -2437,6 +2687,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 
 		/**
 		 * Since it's test for random order, can't check against exact post ID or content
@@ -2539,11 +2791,12 @@ class TestPost extends BaseTestCase {
 		ElasticPress\Elasticsearch::factory()->refresh_indices();
 
 		$args = array(
-			's' => '',
+			'ep_integrate' => true
 		);
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -2572,6 +2825,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -2601,6 +2855,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -2629,6 +2884,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -2657,6 +2913,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -2687,6 +2944,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -2718,6 +2976,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -2748,6 +3007,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -2778,6 +3038,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -2808,6 +3069,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -2855,6 +3117,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -2906,6 +3169,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -2937,9 +3201,41 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertTrue( isset( $query->posts[0]->elasticsearch ) );
 		$this->assertEquals( 3, $query->post_count );
 		$this->assertEquals( 3, $query->found_posts );
+	}
+
+	/**
+	 * Test a query that searches and filters by a meta value using NOT LIKE operator
+	 *
+	 * @since 3.6.0
+	 * @group post
+	 */
+	public function testMetaQueryNotLike() {
+		Functions\create_and_sync_post( array( 'post_content' => 'post content findme' ), array( 'test_key' => 'ALICE in wonderland' ) );
+		Functions\create_and_sync_post( array( 'post_content' => 'post content findme' ), array( 'test_key' => 'alice in melbourne' ) );
+		Functions\create_and_sync_post( array( 'post_content' => 'post content findme' ), array( 'test_key' => 'AlicE in america' ) );
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+		$args = array(
+			's'          => 'findme',
+			'meta_query' => array(
+				array(
+					'key'     => 'test_key',
+					'value'   => 'melbourne',
+					'compare' => 'NOT LIKE',
+				),
+			),
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+		$this->assertTrue( isset( $query->posts[0]->elasticsearch ) );
+		$this->assertEquals( 2, $query->post_count );
+		$this->assertEquals( 2, $query->found_posts );
 	}
 
 	/**
@@ -2985,6 +3281,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -3013,6 +3310,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -3058,7 +3356,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
-		$this->assertTrue( ! empty( $this->fired_actions['ep_wp_query_search'] ) );
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$this->assertEquals( $query->post_count, 2 );
 		$this->assertEquals( $query->found_posts, 2 );
@@ -3098,8 +3396,11 @@ class TestPost extends BaseTestCase {
 			's' => 'findme',
 		);
 
+		$num_queries = $GLOBALS['wpdb']->num_queries;
+
 		$query = new \WP_Query( $args );
 
+		$this->assertSame( $num_queries, $GLOBALS['wpdb']->num_queries );
 		$this->assertEquals( 0, $query->post_count );
 		$this->assertEquals( 0, $query->found_posts );
 
@@ -3126,6 +3427,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertFalse( $query->query_vars['cache_results'] );
 	}
 
@@ -3147,6 +3449,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertTrue( $query->query_vars['cache_results'] );
 	}
 
@@ -3169,6 +3472,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$cache = wp_cache_get( $query->posts[0]->ID, 'posts' );
 
@@ -3193,6 +3498,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 
 		$cache = wp_cache_get( $query->posts[0]->ID, 'posts' );
 
@@ -3380,12 +3687,15 @@ class TestPost extends BaseTestCase {
 	 */
 	public function testMetaValueTypes() {
 
-		$intval         = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 13 );
-		$floatval       = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 13.43 );
-		$textval        = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 'some text' );
-		$bool_false_val = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( false );
-		$bool_true_val  = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( true );
-		$dateval        = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( '2015-01-01' );
+		$intval            = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 13 );
+		$floatval          = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 13.43 );
+		$textval           = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 'some text' );
+		$float_string      = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( '20.000000' );
+		$bool_false_val    = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( false );
+		$bool_true_val     = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( true );
+		$dateval           = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( '2015-01-01' );
+		$recognizable_time = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( 'third monday of January 2020' );
+		$relative_format   = ElasticPress\Indexables::factory()->get( 'post' )->prepare_meta_value_types( '+1 year' );
 
 		$this->assertTrue( is_array( $intval ) && 5 === count( $intval ) );
 		$this->assertTrue( is_array( $intval ) && array_key_exists( 'long', $intval ) && 13 === $intval['long'] );
@@ -3393,13 +3703,55 @@ class TestPost extends BaseTestCase {
 		$this->assertTrue( is_array( $floatval ) && array_key_exists( 'double', $floatval ) && 13.43 === $floatval['double'] );
 		$this->assertTrue( is_array( $textval ) && 6 === count( $textval ) );
 		$this->assertTrue( is_array( $textval ) && array_key_exists( 'raw', $textval ) && 'some text' === $textval['raw'] );
+		$this->assertTrue( is_array( $float_string ) && 8 === count( $float_string ) );
+		$this->assertTrue( is_array( $float_string ) && array_key_exists( 'raw', $float_string ) && '20.000000' === $float_string['raw'] );
 		$this->assertTrue( is_array( $bool_false_val ) && 3 === count( $bool_false_val ) );
 		$this->assertTrue( is_array( $bool_false_val ) && array_key_exists( 'boolean', $bool_false_val ) && false === $bool_false_val['boolean'] );
 		$this->assertTrue( is_array( $bool_true_val ) && 3 === count( $bool_true_val ) );
 		$this->assertTrue( is_array( $bool_true_val ) && array_key_exists( 'boolean', $bool_true_val ) && true === $bool_true_val['boolean'] );
 		$this->assertTrue( is_array( $dateval ) && 6 === count( $dateval ) );
 		$this->assertTrue( is_array( $dateval ) && array_key_exists( 'datetime', $dateval ) && '2015-01-01 00:00:00' === $dateval['datetime'] );
+		$this->assertTrue( is_array( $recognizable_time ) && 6 === count( $recognizable_time ) );
+		$this->assertTrue( is_array( $recognizable_time ) && array_key_exists( 'datetime', $recognizable_time ) && '2020-01-20 00:00:00' === $recognizable_time['datetime'] );
+		$this->assertTrue( is_array( $relative_format ) && 6 === count( $relative_format ) );
+		$this->assertTrue( is_array( $relative_format ) && array_key_exists( 'datetime', $relative_format ) && date( 'Y-m-d H:i:s', strtotime( '+1 year' ) ) === $relative_format['datetime'] );
 
+	}
+
+	public function testMetaValueTypeDate() {
+		$meta_types = array();
+
+		$default_date_time = array(
+			'date'     => '1970-01-01',
+			'datetime' => '1970-01-01 00:00:01',
+			'time'     => '00:00:01'
+		);
+
+		// Invalid dates
+		$textval           = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, 'some text' );
+		$k20_string        = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, '20.000000' );
+		$bool_false_val    = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, false );
+		$bool_true_val     = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, true );
+
+		$this->assertEquals( $default_date_time, $textval );
+		$this->assertEquals( $default_date_time, $k20_string );
+		$this->assertEmpty( $bool_false_val );
+		$this->assertEmpty( $bool_true_val );
+
+		// Valid dates
+		$intval            = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, time() );
+		$floatval          = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, 13.43 );
+		$float_string      = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, '20.000001' );
+		$dateval           = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, '2015-01-01' );
+		$recognizable_time = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, 'third day of January 2020' );
+		$relative_format   = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_meta_values( $meta_types, '+1 year' );
+
+		$this->assertFalse( isset( $intval['date'] ) || isset( $intval['datetime'] ) || isset( $intval['time'] ) );
+		$this->assertFalse( isset( $floatval['date'] ) || isset( $floatval['datetime'] ) || isset( $floatval['time'] ) );
+		$this->assertTrue( isset( $float_string['date'] ) && isset( $float_string['datetime'] ) && isset( $float_string['time'] ) );
+		$this->assertTrue( isset( $dateval['date'] ) && isset( $dateval['datetime'] ) && isset( $dateval['time'] ) );
+		$this->assertTrue( isset( $recognizable_time['date'] ) && isset( $recognizable_time['datetime'] ) && isset( $recognizable_time['time'] ) );
+		$this->assertTrue( isset( $relative_format['date'] ) && isset( $relative_format['datetime'] ) && isset( $relative_format['time'] ) );
 	}
 
 	/**
@@ -3423,6 +3775,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -3448,6 +3801,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -3485,6 +3839,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -3518,6 +3873,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -3535,6 +3891,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -3552,6 +3909,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -3585,6 +3943,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 
@@ -3602,6 +3961,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -3634,6 +3994,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -3664,6 +4025,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 
 		$args = array(
@@ -3680,6 +4042,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 
 	}
@@ -3709,6 +4072,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 
 		$args = array(
@@ -3725,6 +4089,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 	}
 
@@ -3753,6 +4118,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 
 		$args = array(
@@ -3769,6 +4135,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 
 		$args = array(
@@ -3785,6 +4152,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 	}
 
@@ -3813,8 +4181,49 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
+	}
+
+	/**
+	 * Test a post_name__in query
+	 *
+	 * @group post
+	 * @since 3.6.0
+	 */
+	public function testPostNameInQuery() {
+		Functions\create_and_sync_post(
+			array(
+				'post_content' => 'findme name in test 1',
+				'post_name'    => 'findme-name-in',
+			)
+		);
+		Functions\create_and_sync_post( array( 'post_content' => 'findme name in test 2' ) );
+		Functions\create_and_sync_post( array( 'post_content' => 'findme name in test 3' ) );
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$args = array(
+			's'             => 'findme name in',
+		);
+
+		$args['post_name__in'] = 'findme-name-in';
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$args['post_name__in'] = array( 'findme-name-in' );
+
+		$query2 = new \WP_Query( $args );
+
+		$this->assertTrue( $query2->elasticsearch_success );
+
+		$this->assertEquals( 1, $query->post_count );
+		$this->assertEquals( 1, $query->found_posts );
+		$this->assertEquals( 1, $query2->post_count );
+		$this->assertEquals( 1, $query2->found_posts );
 	}
 
 	/**
@@ -3855,6 +4264,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -3877,6 +4287,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -3919,6 +4330,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -3941,6 +4353,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -3983,6 +4396,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -3993,24 +4407,31 @@ class TestPost extends BaseTestCase {
 	 * @since 2.3
 	 */
 	public function testPostMimeTypeQuery() {
-		Functions\create_and_sync_post(
+		$attachment_id_1_jpeg = Functions\create_and_sync_post(
 			array(
 				'post_type'      => 'attachment',
 				'post_mime_type' => 'image/jpeg',
 				'post_status'    => 'inherit',
 			)
 		);
-		Functions\create_and_sync_post(
+		$attachment_id_2_jpeg = Functions\create_and_sync_post(
 			array(
 				'post_type'      => 'attachment',
 				'post_mime_type' => 'image/jpeg',
 				'post_status'    => 'inherit',
 			)
 		);
-		Functions\create_and_sync_post(
+		$attachment_id_3_pdf = Functions\create_and_sync_post(
 			array(
 				'post_type'      => 'attachment',
 				'post_mime_type' => 'application/pdf',
+				'post_status'    => 'inherit',
+			)
+		);
+		$attachment_id_4_png = Functions\create_and_sync_post(
+			array(
+				'post_type'      => 'attachment',
+				'post_mime_type' => 'image/png',
 				'post_status'    => 'inherit',
 			)
 		);
@@ -4026,7 +4447,32 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
-		$this->assertEquals( 2, $query->post_count );
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$attachment_names = wp_list_pluck( $query->posts, 'post_name' );
+
+		$this->assertEquals( 3, $query->post_count );
+
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_1_jpeg ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_2_jpeg ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_4_png ), $attachment_names );
+
+		$args = array(
+			'ep_integrate'   => true,
+			'post_mime_type' => 'image/png',
+			'post_type'      => 'attachment',
+			'post_status'    => 'inherit',
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$attachment_names = wp_list_pluck( $query->posts, 'post_name' );
+
+		$this->assertEquals( 1, $query->post_count );
+
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_4_png ), $attachment_names );
 
 		$args = array(
 			'ep_integrate'   => true,
@@ -4040,7 +4486,57 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$attachment_names = wp_list_pluck( $query->posts, 'post_name' );
+
 		$this->assertEquals( 3, $query->found_posts );
+
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_1_jpeg ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_2_jpeg ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_3_pdf ), $attachment_names );
+
+		$args = array(
+			'ep_integrate'   => true,
+			'post_mime_type' => array(
+				'image',
+				'application/pdf',
+			),
+			'post_type'      => 'attachment',
+			'post_status'    => 'inherit',
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$attachment_names = wp_list_pluck( $query->posts, 'post_name' );
+
+		$this->assertEquals( 4, $query->found_posts );
+
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_1_jpeg ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_2_jpeg ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_3_pdf ), $attachment_names );
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_4_png ), $attachment_names );
+
+		$args = array(
+			'ep_integrate'   => true,
+			'post_mime_type' => array(
+				'image/png',
+			),
+			'post_type'      => 'attachment',
+			'post_status'    => 'inherit',
+		);
+
+		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$attachment_names = wp_list_pluck( $query->posts, 'post_name' );
+
+		$this->assertEquals( 1, $query->found_posts );
+
+		$this->assertContains( get_post_field( 'post_name', $attachment_id_4_png ), $attachment_names );
 	}
 
 	/**
@@ -4081,6 +4577,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -4098,6 +4595,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -4142,6 +4640,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -4191,6 +4690,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 		$this->assertTrue( isset( $query->posts[0]->elasticsearch ) );
@@ -4200,6 +4700,7 @@ class TestPost extends BaseTestCase {
 	 * If a post is sticky and we are on the home page, it should return at the top.
 	 *
 	 * @group post
+	 * @group post-sticky
 	 */
 	public function testStickyPostsIncludedOnHome() {
 		Functions\create_and_sync_post( array( 'post_title' => 'Normal post 1' ) );
@@ -4220,6 +4721,7 @@ class TestPost extends BaseTestCase {
 	 * If a post is not sticky and we are not on the home page, it should not return at the top.
 	 *
 	 * @group post
+	 * @group post-sticky
 	 */
 	public function testStickyPostsExcludedOnNotHome() {
 		Functions\create_and_sync_post( array( 'post_title' => 'Normal post 1' ) );
@@ -4229,13 +4731,13 @@ class TestPost extends BaseTestCase {
 
 		ElasticPress\Elasticsearch::factory()->refresh_indices();
 
-		$args = array(
-			's' => '',
-		);
+		// This used to perform a new WP_Query with "s", but it needs to
+		// perform a search request via the URL.
+		$this->go_to( '/?s=' );
 
-		$query = new \WP_Query( $args );
+		$q = $GLOBALS['wp_query'];
 
-		$this->assertNotEquals( 'Sticky post', $query->posts[0]->post_title );
+		$this->assertNotEquals( 'Sticky post', $q->posts[0]->post_title );
 	}
 
 	/**
@@ -4253,6 +4755,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 5, $query->post_count );
 		$this->assertEquals( 5, $query->found_posts );
 
@@ -4263,6 +4767,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -4282,6 +4788,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -4314,6 +4822,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 2 );
 		$this->assertEquals( $query->found_posts, 2 );
 	}
@@ -4343,6 +4853,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 4 );
 		$this->assertEquals( $query->found_posts, 4 );
 	}
@@ -4372,6 +4883,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -4406,6 +4919,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 5 );
 		$this->assertEquals( $query->found_posts, 5 );
 	}
@@ -4435,6 +4949,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 0 );
 		$this->assertEquals( $query->found_posts, 0 );
 	}
@@ -4460,6 +4976,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 1 );
 		$this->assertEquals( $query->found_posts, 1 );
 	}
@@ -4595,6 +5113,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 5 );
 		$this->assertEquals( $query->found_posts, 5 );
 	}
@@ -4619,6 +5139,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 8 );
 		$this->assertEquals( $query->found_posts, 8 );
 	}
@@ -4644,6 +5166,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 1, $query->post_count );
 		$this->assertEquals( 1, $query->found_posts );
 	}
@@ -4690,6 +5213,8 @@ class TestPost extends BaseTestCase {
 		$this->assertSame( 10, $filter['and']['bool']['must'][0]['term']['date_terms.week'] );
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 4 );
 		$this->assertEquals( $query->found_posts, 4 );
 
@@ -4761,6 +5286,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 2 );
 		$this->assertEquals( $query->found_posts, 2 );
 	}
@@ -4791,6 +5318,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( $query->post_count, 0 );
 		$this->assertEquals( $query->found_posts, 0 );
 	}
@@ -4823,6 +5352,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -4847,6 +5378,8 @@ class TestPost extends BaseTestCase {
 		);
 
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 9, $query->post_count );
 		$this->assertEquals( 9, $query->found_posts );
 	}
@@ -4874,6 +5407,9 @@ class TestPost extends BaseTestCase {
 			's' => 'findme',
 		);
 		$query = new \WP_Query( $args );
+
+		$this->assertTrue( $query->elasticsearch_success );
+
 		$check = ElasticPress\Indexables::factory()->get( 'post' )->elasticpress_enabled( $query );
 		$this->assertTrue( $check );
 	}
@@ -4936,7 +5472,54 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, count( $query->posts ) );
+	}
+
+	/**
+	 * Test a tag query by slug using array and comma separated string as arguments.
+	 *
+	 * @group post
+	 */
+	public function testTagSlugQuery() {
+		$post_id_1 = Functions\create_and_sync_post(
+			array(
+				'post_content' => 'findme test 1',
+				'tags_input'   => array( 'slug1', 'slug2' ),
+			)
+		);
+		$post_id_2 = Functions\create_and_sync_post(
+			array(
+				'post_content' => 'findme test 2',
+				'tags_input'   => array( 'slug1', 'slug2', 'slug3', 'slug4' ),
+			)
+		);
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$query1_args = [
+			's'   => 'findme',
+			'tag' => 'slug1,slug2',
+		];
+
+		$query2_args = [
+			's'   => 'findme',
+			'tag' => [ 'slug1', 'slug2' ],
+		];
+
+		$query1 = new \WP_Query( $query1_args );
+		$query2 = new \WP_Query( $query2_args );
+
+		$this->assertTrue( $query1->elasticsearch_success );
+		$this->assertTrue( $query2->elasticsearch_success );
+
+		$this->assertTrue( isset( $query1->posts[0]->elasticsearch ) );
+		$this->assertTrue( isset( $query2->posts[0]->elasticsearch ) );
+
+		$this->assertEquals( 2, $query1->post_count );
+		$this->assertEquals( 2, $query1->found_posts );
+		$this->assertEquals( 2, $query2->post_count );
+		$this->assertEquals( 2, $query2->found_posts );
 	}
 
 	/**
@@ -4980,6 +5563,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 
@@ -4998,6 +5582,7 @@ class TestPost extends BaseTestCase {
 
 		$query = new \WP_Query( $args );
 
+		$this->assertTrue( $query->elasticsearch_success );
 		$this->assertEquals( 2, $query->post_count );
 		$this->assertEquals( 2, $query->found_posts );
 	}
@@ -5088,11 +5673,11 @@ class TestPost extends BaseTestCase {
 		$this->assertCount( 1, $results['objects'] );
 		$this->assertEquals( 3, $results['total_objects'] );
 
-		// A custom start_object_id was passed in.
+		// A custom upper_limit_object_id was passed in.
 		$results = $indexable_post_object->query_db(
 			[
 				'per_page' => 1,
-				'ep_indexing_start_object_id' => $post_id_1,
+				'ep_indexing_upper_limit_object_id' => $post_id_1,
 			]
 		);
 
@@ -5105,8 +5690,8 @@ class TestPost extends BaseTestCase {
 		$results = $indexable_post_object->query_db(
 			[
 				'per_page' => 1,
-				'ep_indexing_start_object_id' => $post_id_3,
-				'ep_indexing_end_object_id' => $post_id_2,
+				'ep_indexing_upper_limit_object_id' => $post_id_3,
+				'ep_indexing_lower_limit_object_id' => $post_id_2,
 				'ep_indexing_last_processed_object_id' => $post_id_3,
 			]
 		);
@@ -5128,46 +5713,30 @@ class TestPost extends BaseTestCase {
 		$this->assertEquals( $post_id_1, $post_ids[0] );
 		$this->assertCount( 1, $results['objects'] );
 		$this->assertEquals( 1, $results['total_objects'] );
-	}
 
-	/**
-	 * Test the filters in query_db.
-	 *
-	 * @return void
-	 * @group post
-	 */
-	function testQueryDbFilters() {
-		$indexable_post_object = new \ElasticPress\Indexable\Post\Post();
-
-		$args_post_ids = [];
-		$args_post_ids[] = Functions\create_and_sync_post();
-		$args_post_ids[] = Functions\create_and_sync_post();
-		$args_post_ids[] = Functions\create_and_sync_post();
-		$args_post_ids[] = Functions\create_and_sync_post();
-
-		$defaults_filter = function( $args ) use ( $args_post_ids ) {
-			$args['post__in'] = $args_post_ids;
-			return $args;
-		};
-
-		$index_filter = function( $args ) {
-			$args['posts_per_page'] = 3;
-			$args['order'] = 'ASC';
-			return $args;
-		};
-
-		add_filter( 'ep_post_query_db_args', $defaults_filter );
-		add_filter( 'ep_index_posts_args', $index_filter );
-
-		$results = $indexable_post_object->query_db( [] );
-
-		remove_filter( 'ep_post_query_db_args', $defaults_filter );
-		remove_filter( 'ep_index_posts_args', $index_filter );
+		$results = $indexable_post_object->query_db(
+			[
+				'offset' => 1,
+				'ep_indexing_advanced_pagination' => false, // VIP: Disable advanced pagination with offset
+			]
+		);
 
 		$post_ids = wp_list_pluck( $results['objects'], 'ID' );
-		$this->assertCount( 3, $post_ids );
-		$this->assertContains( $args_post_ids[2], $post_ids );
-		$this->assertNotContains( $args_post_ids[3], $post_ids );
+		$this->assertEquals( $post_id_2, $post_ids[0] );
+		$this->assertCount( 2, $results['objects'] );
+		$this->assertEquals( 3, $results['total_objects'] );
+
+		$results = $indexable_post_object->query_db(
+			[
+				'offset' => 3,
+				'ep_indexing_advanced_pagination' => false, // VIP: Disable advanced pagination with offset
+			]
+		);
+
+		$this->assertCount( 0, $results['objects'] );
+		$this->assertEquals( 3, $results['total_objects'] );
+
+		// VIP: Removed -1 offset in tests
 	}
 
 	/**
@@ -5246,12 +5815,12 @@ class TestPost extends BaseTestCase {
 	}
 
 	/**
-	 * Tests additional code inside format_args.
+	 * Tests root taxonomy queries inside format_args.
 	 *
 	 * @return void
 	 * @group post
 	 */
-	public function testFormatArgs() {
+	public function testFormatArgsRootLevelTaxonomies() {
 
 		$post = new \ElasticPress\Indexable\Post\Post();
 
@@ -5276,5 +5845,972 @@ class TestPost extends BaseTestCase {
 		$this->assertSame( 123, $must_terms[0]['terms']['terms.category.term_id'][0] );
 		$this->assertSame( 'tag-slug', $must_terms[1]['terms']['terms.post_tag.slug'][0] );
 		$this->assertSame( 'post-tag-slug', $must_terms[2]['terms']['terms.post_tag.slug'][0] );
+
+		// Verify a bug fix where two different terms.post_tag.term_id
+		// parameters were being created. Should only be one parameter
+		// with the two IDs.
+		$args = $post->format_args(
+			[
+				'tag__and' => [ 123, 456 ],
+				'tag_id'   => 123,
+			],
+			$query
+		);
+
+		$this->assertTrue( is_array( $args['post_filter']['bool']['must'][0]['bool']['must'] ) );
+
+		$must_terms = $args['post_filter']['bool']['must'][0]['bool']['must'];
+
+		$this->assertCount( 1, $must_terms );
+		$this->assertCount( 2, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+		$this->assertContains( 123, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+		$this->assertContains( 456, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+
+		// Verify we're append the tag_id to the array.
+		$args = $post->format_args(
+			[
+				'tag__and' => [ 123, 456 ],
+				'tag_id'   => 789,
+			],
+			$query
+		);
+
+		$this->assertTrue( is_array( $args['post_filter']['bool']['must'][0]['bool']['must'] ) );
+
+		$must_terms = $args['post_filter']['bool']['must'][0]['bool']['must'];
+
+		$this->assertCount( 1, $must_terms );
+		$this->assertCount( 3, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+		$this->assertContains( 123, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+		$this->assertContains( 456, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+		$this->assertContains( 789, $must_terms[0]['terms']['terms.post_tag.term_id'] );
+	}
+
+	/**
+	 * Tests post_mime_type in format_args().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testFormatArgsPostMimeType() {
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		$query = new \WP_Query();
+
+		$args = $post->format_args(
+			[
+				'post_mime_type' => 'image',
+			],
+			$query
+		);
+
+		$this->assertSame( 'image.*', $args['post_filter']['bool']['must'][0]['regexp']['post_mime_type'] );
+
+		$args = $post->format_args(
+			[
+				'post_mime_type' => [ 'image/jpeg' ],
+			],
+			$query
+		);
+
+		$this->assertCount( 1, $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+		$this->assertSame( 'image/jpeg', $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'][0] );
+
+		$args = $post->format_args(
+			[
+				'post_mime_type' => [ 'image/jpeg', 'application/pdf' ],
+			],
+			$query
+		);
+
+		$this->assertCount( 2, $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+		$this->assertContains( 'image/jpeg', $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+		$this->assertContains( 'application/pdf', $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+
+		$args = $post->format_args(
+			[
+				'post_mime_type' => [ 'image' ],
+			],
+			$query
+		);
+
+		$this->assertGreaterThan( 1, count( $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] ) );
+		$this->assertContains( 'image/jpeg', $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+
+		$args = $post->format_args(
+			[
+				'post_mime_type' => [ 'image', 'application/pdf' ],
+			],
+			$query
+		);
+
+		$this->assertGreaterThan( 2, count( $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] ) );
+		$this->assertContains( 'image/jpeg', $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+		$this->assertContains( 'application/pdf', $args['post_filter']['bool']['must'][0]['terms']['post_mime_type'] );
+
+		$args = $post->format_args(
+			[
+				'post_mime_type' => [],
+			],
+			$query
+		);
+
+		$this->assertArrayNotHasKey( 'terms', $args['post_filter']['bool']['must'][0] );
+	}
+
+	/**
+	 * Tests author in format_args().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testFormatArgsAuthor() {
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		$query = new \WP_Query();
+
+		$args = $post->format_args(
+			[
+				'author' => 123,
+			],
+			$query
+		);
+
+		$this->assertSame( 123, $args['post_filter']['bool']['must'][0]['term']['post_author.id'] );
+
+		$args = $post->format_args(
+			[
+				'author_name' => 'Bacon Ipsum',
+			],
+			$query
+		);
+
+		$this->assertSame( 'Bacon Ipsum', $args['post_filter']['bool']['must'][0]['term']['post_author.display_name'] );
+	}
+
+	/**
+	 * Tests sticky posts in format_args().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testFormatArgsStickyPosts() {
+		global $wp_query;
+
+		// Create a sticky post.
+		$sticky_post_id = Functions\create_and_sync_post();
+		stick_post( $sticky_post_id );
+
+		$sticky_posts = get_option( 'sticky_posts' );
+		$this->assertNotEmpty( $sticky_posts );
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		$this->go_to( home_url( '/' ) );
+
+		$args = $post->format_args(
+			[
+				'ep_integrate'        => true,
+				'ignore_sticky_posts' => false,
+			],
+			$wp_query
+		);
+
+		$this->assertSame( 'desc', $args['sort'][0]['_score']['order'] );
+		$this->assertSame( 1, $args['query']['function_score']['query']['match_all']['boost'] );
+		$this->assertContains( $sticky_post_id, $args['query']['function_score']['functions'][0]->filter['terms']['_id'] );
+		$this->assertSame( 20, $args['query']['function_score']['functions'][0]->weight );
+	}
+
+	/**
+	 * Tests post statuses for admin in format_args().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testFormatArgsAdminPostStatuses() {
+
+		set_current_screen( 'edit.php' );
+		$this->assertTrue( is_admin() );
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		// This will include statuses besides publish.
+		$args = $post->format_args( [ ], new \WP_Query() );
+
+		$statuses = $args['post_filter']['bool']['must'][1]['terms']['post_status'];
+
+		$this->assertContains( 'publish', $statuses );
+		$this->assertContains( 'future', $statuses );
+		$this->assertContains( 'draft', $statuses );
+		$this->assertContains( 'pending', $statuses );
+		$this->assertContains( 'private', $statuses );
+	}
+
+	/**
+	 * Tests fields in format_args().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testFormatArgsFields() {
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		$args = $post->format_args(
+			[
+				'fields' => 'ids',
+			],
+			new \WP_Query()
+		);
+
+		$this->assertContains( 'post_id', $args['_source']['includes'] );
+
+		$args = $post->format_args(
+			[
+				'fields' => 'id=>parent',
+			],
+			new \WP_Query()
+		);
+
+		$this->assertContains( 'post_id', $args['_source']['includes'] );
+		$this->assertContains( 'post_parent', $args['_source']['includes'] );
+	}
+
+	/**
+	 * Tests aggs in format_args().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testFormatArgsAggs() {
+		// For reference https://www.elasticpress.io/blog/2017/09/aggregations-api-for-grouping-data/.
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		$args = $post->format_args(
+			[
+				// Triggers $use_filter to be true.
+				'post_status' => 'publish',
+
+				'aggs' => [
+					'name' => 'post_type_stats',
+					'use-filter' => true,
+					'aggs' => [
+						'terms' => [
+							'field' => 'terms.post_type',
+						],
+					],
+				],
+			],
+			new \WP_Query()
+		);
+
+		$this->assertSame( 'publish', $args['aggs']['post_type_stats']['filter']['bool']['must'][1]['term']['post_status'] );
+		$this->assertSame( 'terms.post_type', $args['aggs']['post_type_stats']['aggs']['terms']['field'] );
+
+		$args = $post->format_args(
+			[
+				'aggs' => [
+					'aggs' => [
+						'terms' => [
+							'field' => 'terms.post_type',
+						],
+					],
+				],
+			],
+			new \WP_Query()
+		);
+
+		$this->assertSame( 'terms.post_type', $args['aggs']['aggregation_name']['terms']['field'] );
+	}
+
+	/**
+	 * Tests additional order by parameters in parse_orderby().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testParseOrderBy() {
+
+		// Post type.
+		$query_args = [
+			'ep_integrate' => true,
+			'orderby'      => 'type',
+			'order'        => 'asc',
+		];
+
+		$assert_callback = function( $args ) {
+
+			$this->assertArrayHasKey( 'post_type.raw', $args['sort'][0] );
+			$this->assertSame( 'asc', $args['sort'][0]['post_type.raw']['order'] );
+
+			return $args;
+		};
+
+		// We need to run tests inside a callback because parse_orderby()
+		// is a protected function.
+		add_filter( 'ep_formatted_args', $assert_callback );
+		$query = new \WP_Query( $query_args );
+		remove_filter( 'ep_formatted_args', $assert_callback );
+
+		// Post modified.
+		$query_args['orderby'] = 'modified';
+
+		$assert_callback = function( $args ) {
+
+			$this->assertArrayHasKey( 'post_modified', $args['sort'][0] );
+			$this->assertSame( 'asc', $args['sort'][0]['post_modified']['order'] );
+
+			return $args;
+		};
+
+		// Run the tests.
+		add_filter( 'ep_formatted_args', $assert_callback );
+		$query = new \WP_Query( $query_args );
+		remove_filter( 'ep_formatted_args', $assert_callback );
+
+		// Meta value.
+		$query_args['orderby']  = 'meta_value';
+		$query_args['meta_key'] = 'custom_meta_key';
+
+		$assert_callback = function( $args ) {
+
+			$this->assertArrayHasKey( 'meta.custom_meta_key.raw', $args['sort'][0] );
+			$this->assertSame( 'asc', $args['sort'][0]['meta.custom_meta_key.raw']['order'] );
+
+			return $args;
+		};
+
+		// Run the tests.
+		add_filter( 'ep_formatted_args', $assert_callback );
+		$query = new \WP_Query( $query_args );
+		remove_filter( 'ep_formatted_args', $assert_callback );
+
+		// Meta value number.
+		$query_args['orderby']  = 'meta_value_num';
+		$query_args['meta_key'] = 'custom_price';
+
+		$assert_callback = function( $args ) {
+
+			$this->assertArrayHasKey( 'meta.custom_price.long', $args['sort'][0] );
+			$this->assertSame( 'asc', $args['sort'][0]['meta.custom_price.long']['order'] );
+
+			return $args;
+		};
+
+		// Run the tests.
+		add_filter( 'ep_formatted_args', $assert_callback );
+		$query = new \WP_Query( $query_args );
+		remove_filter( 'ep_formatted_args', $assert_callback );
+	}
+
+	/**
+	 * Tests additional nested tax queries in parse_tax_query().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testParseNestedTaxQuery() {
+
+		// Post type.
+		$query_args = [
+			'ep_integrate' => true,
+			'tax_query' => [
+				'relation' => 'and',
+				[
+					'relation' => 'or',
+					[
+						'taxonomy' => 'category',
+						'terms'    => 123,
+					],
+					[
+						'taxonomy' => 'post_tag',
+						'terms'    => 456,
+					],
+				],
+				[
+					[
+						'taxonomy' => 'custom-tax',
+						'terms'    => 789,
+					],
+				],
+			],
+		];
+
+		$assert_callback = function( $args ) {
+
+			$this->assertSame( 123, $args['post_filter']['bool']['must'][0]['bool']['must'][0]['bool']['should'][0]['terms']['terms.category.term_id'][0] );
+			$this->assertSame( 456, $args['post_filter']['bool']['must'][0]['bool']['must'][0]['bool']['should'][1]['terms']['terms.post_tag.term_id'][0] );
+
+			$this->assertSame( 789, $args['post_filter']['bool']['must'][0]['bool']['must'][1]['bool']['must'][0]['terms']['terms.custom-tax.term_id'][0] );
+
+			return $args;
+		};
+
+		// Run the tests.
+		add_filter( 'ep_formatted_args', $assert_callback );
+		$query = new \WP_Query( $query_args );
+		remove_filter( 'ep_formatted_args', $assert_callback );
+	}
+
+	/**
+	 * Tests additional logic in put_mapping().
+	 *
+	 * @return void
+	 * @group post
+	 */
+	public function testPutMapping() {
+
+		// This lets us trigger the ep_fallback_elasticsearch_version filter.
+		add_filter( 'ep_elasticsearch_version', '__return_false' );
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		// Test the mapping files for different ES versions.
+		$version_and_file = [
+			'4.0' => 'pre-5-0.php',
+			'5.1' => '5-0.php',
+			'5.3' => '5-2.php',
+		];
+
+		foreach ( $version_and_file as $version => $file ) {
+
+			$version_callback = function() use ( $version ) {
+				return $version;
+			};
+
+			// Callback to test the mapping file that was selected.
+			$assert_callback = function( $mapping_file ) use ( $file ) {
+				$this->assertSame( $file, basename( $mapping_file ) );
+				return $mapping_file;
+			};
+
+			// Tell EP that we're running a specific ES version.
+			add_filter( 'ep_fallback_elasticsearch_version', $version_callback );
+
+			// Turn on the test for the mapping file.
+			add_filter( 'ep_post_mapping_file', $assert_callback );
+
+			// Run put_mapping(), which will trigger these filters above
+			// and run the tests.
+			$post->put_mapping();
+
+			remove_filter( 'ep_fallback_elasticsearch_version', $version_callback );
+			remove_filter( 'ep_post_mapping_file', $assert_callback );
+		}
+
+		remove_filter( 'ep_elasticsearch_version', '__return_false' );
+	}
+
+	/**
+	 * Tests the QueryIntegration constructor.
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testQueryIntegrationConstructor() {
+
+		// Pretend we're indexing.
+		add_filter( 'ep_is_indexing', '__return_true' );
+
+		$query_integration = new \ElasticPress\Indexable\Post\QueryIntegration();
+
+		$action_function = [
+			'pre_get_posts'   => [ 'add_es_header', 5 ],
+			'posts_pre_query' => [ 'get_es_posts', 10 ],
+			'loop_end'        => [ 'maybe_restore_blog', 10 ],
+			'the_post'        => [ 'maybe_switch_to_blog', 10 ],
+			'found_posts'     => [ 'found_posts', 10 ],
+		];
+
+		// Make sure these filters are not present if EP is indexing.
+		foreach ( $action_function as $action => $function ) {
+			$this->assertFalse( has_filter( $action, [ $query_integration, $function[0] ] ) );
+		}
+
+		remove_filter( 'ep_is_indexing', '__return_true' );
+
+		$query_integration = new \ElasticPress\Indexable\Post\QueryIntegration();
+
+		// Make sure these filters ARE not present since EP is not flagged
+		// as indexing.
+		foreach ( $action_function as $action => $function ) {
+			$this->assertSame( $function[1], has_filter( $action, [ $query_integration, $function[0] ] ) );
+		}
+	}
+
+	/**
+	 * Tests found_posts.
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testFoundPosts() {
+
+		$query_integration = new \ElasticPress\Indexable\Post\QueryIntegration();
+
+		// Simulate a WP_Query object.
+		$query = new \stdClass();
+		$query->elasticsearch_success = true;
+		$query->num_posts = 123;
+		$query->query_vars = [ 'ep_integrate' => true ];
+
+		$this->assertSame( 123, $query_integration->found_posts( 10, $query ) );
+	}
+
+	/**
+	 * Tests additional logic in get_es_posts();
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testGetESPosts() {
+
+		$assert_callback = function( $formatted_args, $args ) {
+
+			$this->assertSame( 'post', $args['post_type'] );
+
+			return $args;
+		};
+
+		// Add the tests in the filter and run the query to perform the
+		// tests.
+		add_filter( 'ep_formatted_args', $assert_callback, 10, 2 );
+
+		// This will default to 'post' by QueryIntegration when 'any' is
+		// passed in.
+		$query = new \WP_Query(
+			[
+				'ep_integrate' => true,
+				'post_type'    => 'any',
+			]
+		);
+
+		remove_filter( 'ep_formatted_args', $assert_callback, 10, 2 );
+
+		$post_ids   = [];
+		$post_ids[] = Functions\create_and_sync_post();
+		$post_ids[] = Functions\create_and_sync_post();
+		$post_ids[] = Functions\create_and_sync_post( [ 'post_parent' => $post_ids[1] ] );
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		// Now test the fields parameter.
+		$assert_callback = function( $new_posts ) use ( $post_ids ) {
+
+			$this->assertContains( $post_ids[0], $new_posts );
+			$this->assertContains( $post_ids[1], $new_posts );
+			$this->assertContains( $post_ids[2], $new_posts );
+
+			return $new_posts;
+		};
+
+		add_filter( 'ep_wp_query', $assert_callback );
+
+		$query = new \WP_Query(
+			[
+				'ep_integrate' => true,
+				'fields'       => 'ids',
+				'post__in'     => $post_ids,
+			]
+		);
+
+		remove_filter( 'ep_wp_query', $assert_callback );
+
+		// Test the id=>parent parameter.
+		$assert_callback = function( $new_posts ) use ( $post_ids ) {
+
+			$this->assertSame( $post_ids[0], $new_posts[0]->ID );
+			$this->assertSame( $post_ids[1], $new_posts[1]->ID );
+			$this->assertSame( $post_ids[2], $new_posts[2]->ID );
+
+			// The last new post should have the parent ID of the second post.
+			$this->assertSame( $post_ids[1], $new_posts[2]->post_parent );
+
+			foreach ( $new_posts as $new_post ) {
+				$this->assertTrue( $new_post->elasticsearch );
+			}
+
+			return $new_posts;
+		};
+
+		add_filter( 'ep_wp_query', $assert_callback );
+
+		$query = new \WP_Query(
+			[
+				'ep_integrate' => true,
+				'fields'       => 'id=>parent',
+				'post__in'     => $post_ids,
+				'orderby'      => 'post_id',
+				'order'        => 'asc',
+			]
+		);
+
+		remove_filter( 'ep_wp_query', $assert_callback );
+	}
+
+	/**
+	 * Tests logic in maybe_switch_to_blog() and maybe_restore_blog();
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testMaybeSwitchToBlog() {
+
+		// Do an assert here for both single and multisite tests so we
+		// don't get a warning.
+		$multisite = defined( 'WP_TESTS_MULTISITE' ) && '1' === WP_TESTS_MULTISITE;
+
+		$this->assertSame( $multisite, is_multisite() );
+
+		// Only continue if this is in multisite.
+		if ( ! is_multisite() ) {
+			return;
+		}
+
+		$sites      = get_sites();
+		$blog_1_id  = get_current_blog_id();
+		$blog_2_id  = false;
+
+		// Create a second site if we need one.
+		if ( count( $sites ) <= 1 ) {
+
+			$blog_2_id = $this->factory->blog->create_object(
+				[
+					'domain' => 'example2.org',
+					'title'  => 'Example Site 2',
+				]
+			);
+
+			$this->assertFalse( is_wp_error( $blog_2_id ) );
+		} else {
+			$blog_2_id = $sites[1]->blog_id;
+		}
+
+		$this->assertGreaterThan( 1, $blog_2_id );
+
+		$blog_1_post_id = Functions\create_and_sync_post();
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$query = new \WP_Query(
+			[
+				'ep_integrate'   => true,
+				'post__in'       => [ $blog_1_post_id ],
+				'posts_per_page' => 1,
+			]
+		);
+
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$blog_1_post = $query->posts[0];
+
+		$this->assertSame( $blog_1_id, $blog_1_post->site_id );
+
+		// Switch to the new blog, create a post.
+		switch_to_blog( $blog_2_id );
+
+		$blog_2_post_id = Functions\create_and_sync_post();
+
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$query = new \WP_Query(
+			[
+				'ep_integrate'   => true,
+				'post__in'       => [ $blog_2_post_id ],
+				'posts_per_page' => 1,
+			]
+		);
+
+		$this->assertTrue( $query->elasticsearch_success );
+
+		$blog_2_post = $query->posts[0];
+
+		$this->assertSame( $blog_2_id, $blog_2_post->site_id );
+
+		restore_current_blog();
+
+		// Now we have two different posts in different sites and can
+		// test the function. Try accessing the 2nd post from the 1st blog.
+		$query_integration = new \ElasticPress\Indexable\Post\QueryIntegration();
+
+		// This should not switch to the 2nd site because the query is not in the loop.
+		$query_integration->maybe_switch_to_blog( $blog_2_post, $query );
+
+		$this->assertFalse( $query_integration->get_switched() );
+
+		// To switch sites the query must be in the loop.
+		$query->in_the_loop = true;
+
+		// This should switch to the 2nd site.
+		$query_integration->maybe_switch_to_blog( $blog_2_post, $query );
+
+		$this->assertSame( $blog_2_post->site_id, $query_integration->get_switched() );
+
+		// Now we're in "switched" mode, try getting the post from the
+		// 1st site, should switch back.
+		$query_integration->maybe_switch_to_blog( $blog_1_post, $query );
+
+		$this->assertSame( $blog_1_post->site_id, $query_integration->get_switched() );
+
+		restore_current_blog();
+
+		// Verify we're clearing the flag in the class.
+		$query_integration->maybe_restore_blog( null );
+		$this->assertFalse( $query_integration->get_switched() );
+
+		// Make sure we're back on the first site.
+		$this->assertSame( $blog_1_id, get_current_blog_id() );
+	}
+
+	/**
+	 * Tests additional logic with the post sync queue.
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testPostSyncQueueEPKill() {
+
+		// Create a post sync it.
+		$post_id = Functions\create_and_sync_post();
+
+		$this->assertNotEmpty( ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->sync_queue );
+
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->index_sync_queue();
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		// Make sure we're starting with an empty queue.
+		$this->assertEmpty( ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->sync_queue );
+
+		// Turn on the filter to kill syncing.
+		add_filter( 'ep_post_sync_kill', '__return_true' );
+
+		update_post_meta( $post_id, 'custom_key', 123 );
+
+		// Make sure sync queue is still empty when meta is updated for
+		// an existing post.
+		$this->assertEmpty( ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->sync_queue );
+
+		wp_insert_post( [ 'post_type' => 'ep_test', 'post_status' => 'publish' ] );
+
+		// Make sure sync queue is still empty when a new post is added.
+		$this->assertEmpty( ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->sync_queue );
+
+		remove_filter( 'ep_post_sync_kill', '__return_true' );
+
+		// Now verify the queue when this filter is not enabled.
+		update_post_meta( $post_id, 'custom_key', 456 );
+
+		$this->assertNotEmpty( ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->sync_queue );
+
+		// Flush the queues.
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->index_sync_queue();
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+	}
+
+	/**
+	 * Tests additional logic with the post sync queue.
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testPostSyncQueuePermissions() {
+
+		// Create a post sync it.
+		$post_id = Functions\create_and_sync_post();
+
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->index_sync_queue();
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		// Make sure we're starting with an empty queue.
+		$this->assertEmpty( ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->sync_queue );
+
+		// Test user permissions. We'll tell WP the user is not allowed
+		// to edit the post we created at the top of this function.
+		$map_meta_cap_callback = function( $caps, $cap, $user_id, $args ) use ( $post_id ) {
+
+			if ( 'edit_post' === $cap && is_array( $args ) && ! empty( $args ) &&  $post_id === $args[0] ) {
+				$caps = [ 'do_not_allow' ];
+			}
+
+			return $caps;
+		};
+
+		add_filter( 'map_meta_cap', $map_meta_cap_callback, 10, 4 );
+
+		// Try deleting the post.
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->action_delete_post( $post_id );
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->index_sync_queue();
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		// Verify we can still get it from ES.
+		$document = ElasticPress\Indexables::factory()->get( 'post' )->get( $post_id );
+
+		$this->assertTrue( is_array( $document ) );
+		$this->assertSame( $post_id, $document[ 'post_id' ] );
+
+		$post_title = $document['post_title'];
+
+		// Try updating the post title.
+		wp_update_post( [ 'ID' => $post_id, 'post_title' => 'New Post Title' ] );
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		// Verify the old title is still there.
+		$document = ElasticPress\Indexables::factory()->get( 'post' )->get( $post_id );
+
+		$this->assertTrue( is_array( $document ) );
+		$this->assertSame( $post_title, $document[ 'post_title'] );
+
+		// Turn off the map_meta_cap filter and verify everything is flowing
+		// through to ES.
+		remove_filter( 'map_meta_cap', $map_meta_cap_callback, 10, 4 );
+
+		// Try updating the post title.
+		wp_update_post( [ 'ID' => $post_id, 'post_title' => 'New Post Title' ] );
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->index_sync_queue();
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		// Verify the new title is there.
+		$document = ElasticPress\Indexables::factory()->get( 'post' )->get( $post_id );
+
+		$this->assertSame( 'New Post Title', $document[ 'post_title'] );
+
+		// Delete it, make sure it's gone.
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->action_delete_post( $post_id );
+		ElasticPress\Indexables::factory()->get( 'post' )->sync_manager->index_sync_queue();
+		ElasticPress\Elasticsearch::factory()->refresh_indices();
+
+		$document = ElasticPress\Indexables::factory()->get( 'post' )->get( $post_id );
+
+		$this->assertEmpty( $document );
+	}
+
+	/**
+	 * Test prepare_date_terms function
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testPostPrepareDateTerms() {
+		$date = new \DateTime('2021-04-11 23:58:12');
+
+		$return_prepare_date_terms = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_terms( $date->format( 'Y-m-d H:i:s' ) );
+
+		$this->assertIsArray( $return_prepare_date_terms );
+
+		$this->assertArrayHasKey( 'year', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('Y'), $return_prepare_date_terms['year'] );
+
+		$this->assertArrayHasKey( 'month', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('m'), $return_prepare_date_terms['month'] );
+
+		$this->assertArrayHasKey( 'week', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('W'), $return_prepare_date_terms['week'] );
+
+		$this->assertArrayHasKey( 'dayofyear', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('z'), $return_prepare_date_terms['dayofyear'] );
+
+		$this->assertArrayHasKey( 'day', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('d'), $return_prepare_date_terms['day'] );
+
+		$this->assertArrayHasKey( 'dayofweek', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('w'), $return_prepare_date_terms['dayofweek'] );
+
+		$this->assertArrayHasKey( 'dayofweek_iso', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('N'), $return_prepare_date_terms['dayofweek_iso'] );
+
+		$this->assertArrayHasKey( 'hour', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('H'), $return_prepare_date_terms['hour'] );
+
+		$this->assertArrayHasKey( 'minute', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('i'), $return_prepare_date_terms['minute'] );
+
+		$this->assertArrayHasKey( 'second', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('s'), $return_prepare_date_terms['second'] );
+
+		$this->assertArrayHasKey( 'm', $return_prepare_date_terms );
+		$this->assertEquals( $date->format('Ym'), $return_prepare_date_terms['m'] );
+
+		$return_prepare_date_terms = ElasticPress\Indexables::factory()->get( 'post' )->prepare_date_terms('');
+
+		$this->assertIsArray($return_prepare_date_terms );
+
+		$this->assertArrayHasKey( 'year', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'month', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'week', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'dayofyear', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'day', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'dayofweek', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'dayofweek_iso', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'hour', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'minute', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'second', $return_prepare_date_terms );
+		$this->assertArrayHasKey( 'm', $return_prepare_date_terms );
+	}
+
+	/**
+	 * Test when we perform a Tax Query with Id's for the category taxonomy cat id is used and cat slug is not.
+	 *
+	 * @return void
+	 * @group  post
+	 */
+	public function testTaxQueryWithCategoryId() {
+		$cat = wp_create_category( 'test category' );
+
+		$query = new \WP_Query();
+
+		$post = new \ElasticPress\Indexable\Post\Post();
+
+		$args = $post->format_args(
+			[
+				'post_type'    => 'post',
+				'post_status'  => 'public',
+				'ep_integrate' => true,
+				'tax_query'    => array(
+					array(
+						'taxonomy' => 'category',
+						'terms'    => array( $cat ),
+						'field'    => 'term_id',
+						'operator' => 'in',
+					)
+				)
+			],
+			$query
+		);
+
+		$this->assertCount( 1, $args['post_filter']['bool']['must'][0]['bool']['must'] );
+		$this->assertArrayHasKey( 'terms.category.term_id', $args['post_filter']['bool']['must'][0]['bool']['must'][0]['terms'] );
+		$this->assertContains( $cat, $args['post_filter']['bool']['must'][0]['bool']['must'][0]['terms']['terms.category.term_id'] );
+	}
+
+
+	/**
+	 * Tests is_meta_allowed
+	 *
+	 * @return void
+	 * @group  is_meta_allowed
+	 */
+	public function testIsMetaAllowed() {
+		$meta_not_protected 		 = 'meta';
+		$meta_not_protected_excluded = 'meta_excluded';
+		$meta_protected 		 	 = '_meta';
+		$meta_protected_allowed 	 = '_meta_allowed';
+
+		add_filter( 'ep_prepare_meta_allowed_protected_keys', function () use ( $meta_protected_allowed ) {
+			return [ $meta_protected_allowed ];
+		} );
+		add_filter( 'ep_prepare_meta_excluded_public_keys', function () use ( $meta_not_protected_excluded ) {
+			return [ $meta_not_protected_excluded ];
+		} );
+
+		$indexable = \ElasticPress\Indexables::factory()->get( 'post' );
+
+		$this->assertTrue( $indexable->is_meta_allowed( $meta_not_protected, null ) );
+		$this->assertTrue( $indexable->is_meta_allowed( $meta_protected_allowed, null ) );
+
+		$this->assertFalse( $indexable->is_meta_allowed( $meta_not_protected_excluded, null ) );
+		$this->assertFalse( $indexable->is_meta_allowed( $meta_protected, null ) );
 	}
 }

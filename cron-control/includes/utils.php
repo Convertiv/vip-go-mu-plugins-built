@@ -12,11 +12,14 @@ namespace Automattic\WP\Cron_Control;
  *
  * Also removes superfluous, non-event data that Core stores in the option
  *
+ * @deprecated
  * @param array $events Core's cron events array.
  * @param int   $timestamp Optional. Return only events with this timestamp.
  * @return array
  */
 function collapse_events_array( $events, $timestamp = null ) {
+	_deprecated_function( 'collapse_events_array' );
+
 	$collapsed_events = array();
 
 	// Ensure an event is always returned.
@@ -62,10 +65,13 @@ function collapse_events_array( $events, $timestamp = null ) {
 /**
  * Convert simplified representation of cron events array to the format WordPress expects
  *
+ * @deprecated
  * @param array $events Flattened event list.
  * @return array
  */
 function inflate_collapsed_events_array( $events ) {
+	_deprecated_function( 'inflate_collapsed_events_array' );
+
 	$inflated = array(
 		'version' => 2, // Core versions the cron array; without this, Core will attempt to "upgrade" the value.
 	);
@@ -175,4 +181,37 @@ function set_doing_cron() {
 	// WP 4.8 introduced the `wp_doing_cron()` function and filter.
 	// These can be used to override the `DOING_CRON` constant, which may cause problems for plugin's requests.
 	add_filter( 'wp_doing_cron', '__return_true', 99999 );
+}
+
+// Helper method for deprecating publicly accessibly functions/methods.
+function _deprecated_function( string $function, string $replacement = '', $error_level = 2 ) {
+	$error_levels = [
+		'debug'  => 1,
+		'notice' => 2,
+		'warn'   => 3,
+	];
+
+	$message = sprintf( 'Cron-Control: Deprecation. %s is deprecated and will soon be removed.', $function );
+	if ( ! empty( $replacement ) ) {
+		$message .= sprintf( ' Use %s instead.', $replacement );
+	}
+
+	// Use E_WARNING error level.
+	$warning_constant = defined( 'CRON_CONTROL_WARN_FOR_DEPRECATIONS' ) && CRON_CONTROL_WARN_FOR_DEPRECATIONS;
+	if ( $warning_constant || $error_level >= $error_levels['warn'] ) {
+		trigger_error( $message, E_USER_WARNING );
+		return;
+	}
+
+	// Use E_USER_NOTICE regardless of Debug mode.
+	if ( $error_level >= $error_levels['notice'] ) {
+		trigger_error( $message, E_USER_NOTICE );
+		return;
+	}
+
+	// Use E_USER_NOTICE only in Debug mode.
+	if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+		trigger_error( $message, E_USER_NOTICE );
+		return;
+	}
 }

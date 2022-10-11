@@ -78,11 +78,15 @@ class TestUtils extends BaseTestCase {
 	public function testIsSiteIndexableByDefaultSpam() {
 		delete_option( 'ep_indexable' );
 
-		update_blog_status( get_current_blog_id(), 'spam', 1 );
+		if ( is_multisite() ) {
+			update_blog_status( get_current_blog_id(), 'spam', 1 );
 
-		$this->assertFalse( ElasticPress\Utils\is_site_indexable() );
+			$this->assertFalse( ElasticPress\Utils\is_site_indexable() );
 
-		update_blog_status( get_current_blog_id(), 'spam', 0 );
+			update_blog_status( get_current_blog_id(), 'spam', 0 );
+		} else {
+			$this->assertTrue( ElasticPress\Utils\is_site_indexable() );
+		}
 	}
 
 	/**
@@ -94,7 +98,11 @@ class TestUtils extends BaseTestCase {
 	public function testIsSiteIndexableDisabled() {
 		update_option( 'ep_indexable', 'no' );
 
-		$this->assertFalse( ElasticPress\Utils\is_site_indexable() );
+		if ( is_multisite() ) {
+			$this->assertFalse( ElasticPress\Utils\is_site_indexable() );
+		} else {
+			$this->assertTrue( ElasticPress\Utils\is_site_indexable() );
+		}
 	}
 
 	/**
@@ -155,5 +163,24 @@ class TestUtils extends BaseTestCase {
 
 		$this->assertSame( 'my-user-name', $creds['username'] );
 		$this->assertSame( 'my-token', $creds['token'] );
+	}
+
+	/**
+	 * Tests the is_indexing function.
+	 *
+	 * @return void
+	 */
+	public function testIsIndexing() {
+
+		// VIP: Removed test for network site block since we use per-site block
+		update_option( 'ep_index_meta', [] );
+		set_transient( 'ep_wpcli_sync', true, 900 );
+
+		$this->assertTrue( ElasticPress\Utils\is_indexing() );
+
+		delete_option( 'ep_index_meta' );
+		delete_transient( 'ep_wpcli_sync' );
+
+		$this->assertFalse( ElasticPress\Utils\is_indexing() );
 	}
 }

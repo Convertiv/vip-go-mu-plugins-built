@@ -53,6 +53,23 @@ abstract class Feature {
 	public $requires_install_reindex;
 
 	/**
+	 * The order in the features screen
+	 *
+	 * @var int
+	 * @since  3.6.0
+	 */
+	public $order;
+
+	/**
+	 * Set if a feature should be on the left or right side
+	 *
+	 * @var string
+	 * @since  3.6.0
+	 */
+	public $group_order;
+
+
+	/**
 	 * Run on every page load for feature to set itself up
 	 *
 	 * @since  2.1
@@ -117,10 +134,10 @@ abstract class Feature {
 	 * @return array|bool
 	 */
 	public function get_settings() {
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			$feature_settings = get_site_option( 'ep_feature_settings', [] );
-		} else {
-			$feature_settings = get_option( 'ep_feature_settings', [] );
+		// VIP: Every site should have its own option, rather than a network one.
+		$feature_settings = get_option( 'ep_feature_settings', [] );
+		if ( function_exists( 'vip_maybe_backfill_ep_option' ) ) { // TODO: Remove
+			$feature_settings = \vip_maybe_backfill_ep_option( $feature_settings, 'ep_feature_settings' );
 		}
 
 		return ( ! empty( $feature_settings[ $this->slug ] ) ) ? $feature_settings[ $this->slug ] : false;
@@ -133,10 +150,10 @@ abstract class Feature {
 	 * @return boolean
 	 */
 	public function is_active() {
-		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
-			$feature_settings = get_site_option( 'ep_feature_settings', [] );
-		} else {
-			$feature_settings = get_option( 'ep_feature_settings', [] );
+		// VIP: Every site should have its own option, rather than a network one.
+		$feature_settings = get_option( 'ep_feature_settings', [] );
+		if ( function_exists( 'vip_maybe_backfill_ep_option' ) ) { // TODO: Remove
+			$feature_settings = \vip_maybe_backfill_ep_option( $feature_settings, 'ep_feature_settings' );
 		}
 
 		$active = false;

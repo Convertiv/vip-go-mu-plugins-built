@@ -4,6 +4,7 @@
  */
 
 namespace Automattic\VIP\Support_User;
+
 use WP_User;
 
 /**
@@ -48,11 +49,11 @@ class Role {
 	 *
 	 * @return Role object The instance of Role
 	 */
-	static public function init() {
+	public static function init() {
 		static $instance = false;
 
 		if ( ! $instance ) {
-			$instance = new Role;
+			$instance = new Role();
 		}
 
 		return $instance;
@@ -64,7 +65,11 @@ class Role {
 	 * and sets some properties.
 	 */
 	public function __construct() {
-		add_action( 'admin_init', array( $this, 'action_admin_init' ) );
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			add_action( 'wp_loaded', array( $this, 'action_admin_init' ) );
+		} else {
+			add_action( 'admin_init', array( $this, 'action_admin_init' ) );
+		}
 		add_filter( 'editable_roles', array( $this, 'filter_editable_roles' ) );
 		add_filter( 'user_has_cap', array( $this, 'filter_user_has_cap' ), PHP_INT_MAX, 4 );
 	}
@@ -89,25 +94,25 @@ class Role {
 	 *
 	 * @param array   $user_caps An array of all the user's capabilities.
 	 * @param array   $caps      Actual capabilities for meta capability.
-	 * @param array   $args      Optional parameters passed to has_cap(), typically object ID.
+	 * @param array   $_args     Optional parameters passed to has_cap(), typically object ID.
 	 * @param WP_User $user      The user object.
 	 *
 	 * @return array An array of all the user's caps, with the required cap added
 	 */
-	public function filter_user_has_cap( array $user_caps, array $caps, array $args, WP_User $user ) {
+	public function filter_user_has_cap( array $user_caps, array $caps, array $_args, WP_User $user ) {
 		if ( in_array( self::VIP_SUPPORT_ROLE, $user->roles ) && is_proxied_automattician() ) {
 			$caps = array_diff( $caps, self::BANNED_CAPABILITIES );
 
 			foreach ( $caps as $cap ) {
-				$user_caps[$cap] = true;
+				$user_caps[ $cap ] = true;
 			}
 		}
 		return $user_caps;
 	}
 
 	/**
-	 * Hooks the editable_roles filter to place the VIP Support at the bottom of
-	 * any roles listing.
+	 * Hooks the editable_roles filter to remove the VIP Support roles for all users except VIP Support.
+	 * For VIP Support users, it will place the role at the bottom of any roles listings.
 	 *
 	 * @param array $roles An array of WP role data
 	 *
@@ -117,12 +122,16 @@ class Role {
 		$vip_support_roles = array();
 
 		if ( isset( $roles[ self::VIP_SUPPORT_INACTIVE_ROLE ] ) ) {
-			$vip_support_roles[ self::VIP_SUPPORT_INACTIVE_ROLE ] = $roles[ self::VIP_SUPPORT_INACTIVE_ROLE ];
+			if ( current_user_can( 'vip_support' ) ) {
+				$vip_support_roles[ self::VIP_SUPPORT_INACTIVE_ROLE ] = $roles[ self::VIP_SUPPORT_INACTIVE_ROLE ];
+			}
 			unset( $roles[ self::VIP_SUPPORT_INACTIVE_ROLE ] );
 		}
 
 		if ( isset( $roles[ self::VIP_SUPPORT_ROLE ] ) ) {
-			$vip_support_roles[ self::VIP_SUPPORT_ROLE ] = $roles[ self::VIP_SUPPORT_ROLE ];
+			if ( current_user_can( 'vip_support' ) ) {
+				$vip_support_roles[ self::VIP_SUPPORT_ROLE ] = $roles[ self::VIP_SUPPORT_ROLE ];
+			}
 			unset( $roles[ self::VIP_SUPPORT_ROLE ] );
 		}
 
@@ -141,14 +150,14 @@ class Role {
 	 */
 	protected static function error_log( $message ) {
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 			error_log( $message );
 		}
-
 	}
 
 	protected static function add_roles() {
-		add_role( self::VIP_SUPPORT_ROLE, __( 'VIP Support', 'a8c_vip_support' ), array( 'read' => true ) );
-		add_role( self::VIP_SUPPORT_INACTIVE_ROLE, __( 'VIP Support (inactive)', 'a8c_vip_support' ), array( 'read' => true ) );
+		wpcom_vip_add_role( self::VIP_SUPPORT_ROLE, __( 'VIP Support', 'a8c_vip_support' ), array( 'read' => true ) );
+		wpcom_vip_add_role( self::VIP_SUPPORT_INACTIVE_ROLE, __( 'VIP Support (inactive)', 'a8c_vip_support' ), array( 'read' => true ) );
 	}
 
 	/**
@@ -157,21 +166,21 @@ class Role {
 	 */
 	public function maybe_upgrade_version() {
 		$option_name = 'vipsupportrole_version';
-		$version = absint( get_option( $option_name, 0 ) );
+		$version     = absint( get_option( $option_name, 0 ) );
 
-		if ( $version == self::VERSION ) {
+		if ( self::VERSION === $version ) {
 			return;
 		}
 
 		if ( $version < 1 ) {
 			self::add_roles();
-			self::error_log( "VIP Support Role: Added VIP Support role " );
+			self::error_log( 'VIP Support Role: Added VIP Support role ' );
 		}
 
 		// N.B. Remember to increment self::VERSION above when you add a new IF
 
 		update_option( $option_name, self::VERSION );
-		$this->error_log( "VIP Support Role: Done upgrade, now at version " . self::VERSION );
+		$this->error_log( 'VIP Support Role: Done upgrade, now at version ' . self::VERSION );
 
 	}
 }

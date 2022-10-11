@@ -2,7 +2,6 @@
 
 namespace Automattic\VIP\Search;
 
-use \ElasticPress\Indexable as Indexable;
 use \ElasticPress\Indexables as Indexables;
 
 use \WP_Query as WP_Query;
@@ -10,12 +9,12 @@ use \WP_User_Query as WP_User_Query;
 use \WP_Error as WP_Error;
 
 class Health {
-	const CONTENT_VALIDATION_BATCH_SIZE    = 500;
-	const CONTENT_VALIDATION_MAX_DIFF_SIZE = 1000;
-	const CONTENT_VALIDATION_LOCK_NAME = 'vip_search_content_validation_lock';
-	const CONTENT_VALIDATION_LOCK_TIMEOUT = 900; // 15 min
-	const CONTENT_VALIDATION_PROCESS_OPTION = 'vip_search_content_validation_process_post_id';
-	const DOCUMENT_IGNORED_KEYS            = array(
+	const CONTENT_VALIDATION_BATCH_SIZE        = 300;
+	const CONTENT_VALIDATION_MAX_DIFF_SIZE     = 1000;
+	const CONTENT_VALIDATION_LOCK_NAME         = 'vip_search_content_validation_lock';
+	const CONTENT_VALIDATION_LOCK_TIMEOUT      = 900; // 15 min
+	const CONTENT_VALIDATION_PROCESS_OPTION    = 'vip_search_content_validation_process_post_id';
+	const DOCUMENT_IGNORED_KEYS                = array(
 		// This field is proving problematic to reliably diff due to differences in the filters
 		// that run during normal indexing and this validator
 		'post_content_filtered',
@@ -30,12 +29,24 @@ class Health {
 		'index.number_of_replicas',
 		'index.number_of_shards',
 		'index.routing.allocation.include.dc',
+		'index.search.slowlog.threshold.query.warn',
+		'index.search.slowlog.threshold.query.info',
+		'index.search.slowlog.threshold.fetch.warn',
+		'index.indexing.slowlog.threshold.index.warn',
+		'index.indexing.slowlog.source',
 	);
 	const INDEX_SETTINGS_HEALTH_AUTO_HEAL_KEYS = array(
 		'index.max_result_window',
 		'index.number_of_replicas',
 		'index.routing.allocation.include.dc',
+		'index.search.slowlog.threshold.query.warn',
+		'index.search.slowlog.threshold.query.info',
+		'index.search.slowlog.threshold.fetch.warn',
+		'index.indexing.slowlog.threshold.index.warn',
+		'index.indexing.slowlog.source',
 	);
+
+	const REINDEX_JOB_DEFAULT_PRIORITY = 15;
 
 	/**
 	 * Instance of Search class
@@ -45,8 +56,9 @@ class Health {
 	public $search;
 
 	public function __construct( \Automattic\VIP\Search\Search $search ) {
-		$this->search = $search;
-		$this->indexables = \ElasticPress\Indexables::factory();
+		$this->search        = $search;
+		$this->indexables    = \ElasticPress\Indexables::factory();
+		$this->elasticsearch = \ElasticPress\Elasticsearch::factory();
 	}
 
 	/**
@@ -69,10 +81,22 @@ class Health {
 			'entity'   => $indexable->slug,
 			'type'     => ( array_key_exists( 'post_type', $query_args ) ? $query_args['post_type'] : 'N/A' ),
 			'skipped'  => false,
+			'reason'   => 'N/A',
 			'db_total' => 'N/A',
 			'es_total' => 'N/A',
-			'diff' => 'N/A',
+			'diff'     => 'N/A',
 		];
+
+		if ( 'N/A' === $result['type'] && isset( $query_args['type'] ) ) {
+			$result['type'] = $query_args['type'];
+		}
+
+		if ( ! $indexable->index_exists() ) {
+			// If index doesnt exist and we will skip the rest of the check
+			$result['skipped'] = true;
+			$result['reason']  = 'index-not-found';
+			return $result;
+		}
 
 		$es_total = $this->get_index_entity_count_from_elastic_search( $query_args, $indexable );
 		if ( is_wp_error( $es_total ) ) {
@@ -81,18 +105,26 @@ class Health {
 
 		if ( 0 === $es_total ) {
 			// If there is 0 docs in ES, we assume it wasnet initialized and we will skip the rest of the check
-			$result['skipped'] = true;
+			$result['skipped']  = true;
+			$result['reason']   = 'index-empty';
 			$result['es_total'] = 0;
 			return $result;
 		}
 
 		try {
+			if ( isset( $indexable->slug ) && 'user' !== $indexable->slug ) {
+				// to avoid an expensive orderby query on large datasets, we can set the orderby to none here.
+				$query_args['orderby'] = 'none';
+				// Disable advanced pagination so it doesn't override the orderby set
+				$query_args['ep_indexing_advanced_pagination'] = false;
+			}
+
 			// Get total count in DB
 			$db_result = $indexable->query_db( $query_args );
 
 			$db_total = (int) $db_result['total_objects'];
 		} catch ( \Exception $e ) {
-			return new WP_Error( 'db_query_error', sprintf( 'failure querying the DB: %s #vip-search', $e->get_error_message() ) );
+			return new WP_Error( 'db_query_error', sprintf( 'failure querying the DB: %s #vip-search', $e->getMessage() ) );
 		}
 
 		$diff = 0;
@@ -102,7 +134,7 @@ class Health {
 
 		$result['db_total'] = $db_total;
 		$result['es_total'] = $es_total;
-		$result['diff'] = $diff;
+		$result['diff']     = $diff;
 
 		return $result;
 	}
@@ -125,16 +157,24 @@ class Health {
 	public function get_index_entity_count_from_elastic_search( array $query_args, \ElasticPress\Indexable $indexable ) {
 		// Get total count in ES index
 		try {
+			$protected_content         = \ElasticPress\Features::factory()->get_registered_feature( 'protected_content' );
+			$protected_content_enabled = $protected_content ? $protected_content->is_active() : false;
+			// Include password-protected posts in health count query if protected_content feature is used.
+			if ( $protected_content_enabled ) {
+				add_filter( 'ep_exclude_password_protected_from_search', '__return_false' );
+			}
+
 			$query          = self::query_objects( $query_args, $indexable->slug );
 			$formatted_args = $indexable->format_args( $query->query_vars, $query );
 
 			// Get exact total count since Elasticsearch default stops at 10,000.
 			$formatted_args['track_total_hits'] = true;
+			// We don't really need any of the fields.
+			$formatted_args['_source'] = false;
 
 			$es_result = $indexable->query_es( $formatted_args, $query->query_vars );
 		} catch ( \Exception $e ) {
-			$source = method_exists( $e, 'get_error_message' ) ? $e->get_error_message() : $e->getMessage();
-			return new WP_Error( 'es_query_error', sprintf( 'failure querying ES: %s #vip-search', $source ) );
+			return new WP_Error( 'es_query_error', sprintf( 'failure querying ES: %s #vip-search', $e->getMessage() ) );
 		}
 
 		// There is not other useful information out of query_es(): it just returns false in case of failure.
@@ -223,11 +263,15 @@ class Health {
 		$health = new self( $search );
 
 		foreach ( $post_types as $post_type ) {
-			$post_statuses = Indexables::factory()->get( 'post' )->get_indexable_post_status();
+			$post_indexable = Indexables::factory()->get( 'post' );
+			$post_statuses  = $post_indexable->get_indexable_post_status();
 
 			$query_args = [
-				'post_type'   => $post_type,
-				'post_status' => array_values( $post_statuses ),
+				'post_type'      => $post_type,
+				'post_status'    => array_values( $post_statuses ),
+				// Force fetching just one post, otherwise the query may get killed on large datasets.
+				// This works for at least ten million records in posts table.
+				'posts_per_page' => 1,
 			];
 
 			$result = $health->validate_index_entity_count( $query_args, $posts );
@@ -236,14 +280,14 @@ class Health {
 			// Not returning an error, otherwise there is no visibility on other post types
 			if ( is_wp_error( $result ) ) {
 				$result = [
-					'entity'        => $posts->slug,
-					'type'          => $post_type,
-					'error'         => $result->get_error_message(),
-					'index_version' => $index_version,
+					'entity' => $posts->slug,
+					'type'   => $post_type,
+					'error'  => $result->get_error_message(),
 				];
 			}
 
 			$result['index_version'] = $index_version;
+			$result['index_name']    = $post_indexable->get_index_name();
 
 			$results[] = $result;
 
@@ -255,48 +299,132 @@ class Health {
 	}
 
 	/**
+	 * Validate DB and ES index terms counts
+	 *
+	 * @return array Array containing entity (term), type (N/A), error, ES count, DB count, difference
+	 */
+	public static function validate_index_terms_count( $options = array() ) {
+		// Get indexable object
+		$terms = Indexables::factory()->get( 'term' );
+
+		// Indexables::factory()->get() returns boolean|array
+		// False is returned in case of error
+		if ( ! $terms ) {
+			return new WP_Error( 'es_terms_query_error', 'failure retrieving term indexable from ES #vip-search' );
+		}
+
+		$search = \Automattic\VIP\Search\Search::instance();
+
+		if ( $options['index_version'] ) {
+			$version_result = $search->versioning->set_current_version_number( $terms, $options['index_version'] );
+
+			if ( is_wp_error( $version_result ) ) {
+				return $version_result;
+			}
+		}
+
+		$index_version = $search->versioning->get_current_version_number( $terms );
+
+		$query_args = [
+			'order' => 'asc',
+		];
+
+		$result = ( new self( $search ) )->validate_index_entity_count( $query_args, $terms );
+
+		if ( is_wp_error( $result ) ) {
+			return new WP_Error( 'es_terms_query_error', sprintf( 'failure retrieving terms from ES: %s #vip-search', $result->get_error_message() ) );
+		}
+
+		$result['index_version'] = $index_version;
+
+		$search->versioning->reset_current_version_number( $terms );
+
+		return array( $result );
+	}
+
+	/**
+	 * Validate DB and ES index comments counts
+	 *
+	 * @return array Array containing entity (comment), type (comment,review), error, ES count, DB count, difference
+	 */
+	public static function validate_index_comments_count( $options = array() ) {
+		// Get indexable object
+		$comments = Indexables::factory()->get( 'comment' );
+
+		$results = [];
+
+		// Indexables::factory()->get() returns boolean|array
+		// False is returned in case of error
+		if ( ! $comments ) {
+			return new WP_Error( 'es_comments_query_error', 'failure retrieving comment indexable from ES #vip-search' );
+		}
+
+		$search = \Automattic\VIP\Search\Search::instance();
+
+		if ( $options['index_version'] ) {
+			$version_result = $search->versioning->set_current_version_number( $comments, $options['index_version'] );
+
+			if ( is_wp_error( $version_result ) ) {
+				return $version_result;
+			}
+		}
+
+		$index_version = $search->versioning->get_current_version_number( $comments );
+
+		$comment_types = $comments->get_indexable_comment_types();
+
+		$health = new self( $search );
+
+		foreach ( $comment_types as $comment_type ) {
+
+			$query_args = [
+				'type'     => $comment_type,
+				// Force fetching just one comment, otherwise the query may get killed on large datasets.
+				// This works for at least ten million records in comments table.
+				'per_page' => 1,
+				// Empty arguments to silence warnings
+				'karma'    => '',
+				'parent'   => '',
+
+			];
+
+			$result = $health->validate_index_entity_count( $query_args, $comments );
+
+			// In case of error skip to the next comment type
+			// Not returning an error, otherwise there is no visibility on other comment types
+			if ( is_wp_error( $result ) ) {
+				$result = [
+					'entity' => $comments->slug,
+					'type'   => $comment_type,
+					'error'  => $result->get_error_message(),
+				];
+			}
+
+			$result['index_version'] = $index_version;
+			$result['index_name']    = $comments->get_index_name();
+
+			$results[] = $result;
+		}
+
+		$search->versioning->reset_current_version_number( $comments );
+
+		return $results;
+	}
+
+	/**
 	 * Validate DB and ES index post content
 	 *
-	 * ## OPTIONS
-	 *
-	 * [inspect]
-	 * : Optional gives more verbose output for index inconsistencies
-	 *
-	 * [start_post_id=<int>]
-	 * : Optional starting post id (defaults to 1)
-	 *
-	 * [last_post_id=<int>]
-	 * : Optional last post id to check
-	 *
-	 * [batch_size=<int>]
-	 * : Optional batch size
-	 *
-	 * [max_diff_size=<int>]
-	 * : Optional max count of diff before exiting
-	 *
-	 * [do_not_heal]
-	 * : Optional Don't try to correct inconsistencies
-	 *
-	 * [silent]
-	 * : Optional silences all non-error output except for the final results
-	 *
-	 * [force_parallel_execution]
-	 * : Optional Force execution even if the process is already ongoing
-	 *
-	 *
 	 * @param array $options list of options
-	 *
 	 *
 	 * @return array Array containing counts and ids of posts with inconsistent content
 	 */
 	public function validate_index_posts_content( $options ) {
-		$start_post_id = $options['start_post_id'] ?? 1;
-		$last_post_id = $options['last_post_id'] ?? null;
-		$batch_size = $options['batch_size'] ?? null;
-		$max_diff_size = $options['max_diff_size'] ?? null;
-		$silent = isset( $options['silent'] );
-		$inspect = isset( $options['inspect'] );
-		$do_not_heal = isset( $options['do_not_heal'] );
+		$start_post_id            = $options['start_post_id'] ?? 1;
+		$last_post_id             = $options['last_post_id'] ?? null;
+		$batch_size               = $options['batch_size'] ?? null;
+		$max_diff_size            = $options['max_diff_size'] ?? null;
+		$silent                   = isset( $options['silent'] );
+		$do_not_heal              = isset( $options['do_not_heal'] );
 		$force_parallel_execution = isset( $options['force_parallel_execution'] );
 
 		$process_parallel_execution_lock = ! $force_parallel_execution;
@@ -316,7 +444,7 @@ class Health {
 		if ( ! is_numeric( $batch_size ) || 0 >= $batch_size || $batch_size > PHP_INT_MAX ) {
 			$batch_size = self::CONTENT_VALIDATION_BATCH_SIZE;
 		} else {
-			$batch_size = intval( $batch_size );
+			$batch_size = min( 5000, intval( $batch_size ) );
 		}
 
 		// If max diff size NOT an int over 0, reset to default
@@ -370,12 +498,13 @@ class Health {
 				echo sprintf( 'Validating posts %d - %d', $start_post_id, $next_batch_post_id - 1 ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 			}
 
-			$result = $this->validate_index_posts_content_batch( $indexable, $start_post_id, $next_batch_post_id, $inspect );
+			/** @var array|WP_Error */
+			$result = $this->validate_index_posts_content_batch( $indexable, $start_post_id, $next_batch_post_id, $options );
 
 			if ( is_wp_error( $result ) ) {
 				$result['errors'] = array( sprintf( 'batch %d - %d (entity: %s) error: %s', $start_post_id, $next_batch_post_id - 1, $indexable->slug, $result->get_error_message() ) );
 			} elseif ( count( $result ) && ! $do_not_heal ) {
-					self::reconcile_diff( $result );
+				self::reconcile_diff( $result );
 			}
 
 			$results = array_merge( $results, $result );
@@ -411,6 +540,11 @@ class Health {
 
 			if ( $is_cli && ! $silent ) {
 				echo sprintf( "...%s %s\n", empty( $result ) ? '✓' : '✘', $do_not_heal || empty( $result ) ? '' : '(attempted to reconcile)' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			}
+			if ( $is_cli && $silent ) {
+				// To prevent continuous hammering of clusters.
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.rand_mt_rand
+				sleep( mt_rand( 2, 5 ) );
 			}
 		} while ( $start_post_id <= $last_post_id );
 
@@ -457,9 +591,13 @@ class Health {
 		delete_transient( self::CONTENT_VALIDATION_LOCK_NAME );
 	}
 
-	public function validate_index_posts_content_batch( $indexable, $start_post_id, $next_batch_post_id, $inspect ) {
+	public function validate_index_posts_content_batch( $indexable, $start_post_id, $next_batch_post_id, $options ) {
 		global $wpdb;
 
+		$inspect = isset( $options['inspect'] );
+		$mode    = $options['mode'] ?? null;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_type, post_status FROM $wpdb->posts WHERE ID >= %d AND ID < %d", $start_post_id, $next_batch_post_id ) );
 
 		$post_types    = $indexable->get_indexable_post_types();
@@ -483,19 +621,34 @@ class Health {
 		$found_document_ids = wp_list_pluck( $documents, 'ID' );
 
 		$diffs = $inspect ? self::get_missing_docs_or_posts_diff( $found_post_ids, $found_document_ids )
-		                  : self::simplified_get_missing_docs_or_posts_diff( $found_post_ids, $found_document_ids ); // phpcs:ignore Generic.WhiteSpace.DisallowSpaceIndent.SpacesUsed
+		                : self::simplified_get_missing_docs_or_posts_diff( $found_post_ids, $found_document_ids ); // phpcs:ignore Generic.WhiteSpace.DisallowSpaceIndent.SpacesUsed
+
+		if ( $mode && 'missing' === $mode ) {
+			// No need to continue looking for inconsistencies, since we have the ids for missing.
+			return $diffs;
+		}
+
+		// Filter out any that are extra or missing in index
+		$documents = array_filter( $documents, function( $document ) use ( $diffs ) {
+			$key = self::get_post_key( $document['ID'] );
+			return ! array_key_exists( $key, $diffs );
+		} );
+
+		if ( $mode && 'mismatch' === $mode ) {
+			// Clear out previous data for missing posts from $diffs since we only want mismatched.
+			$diffs = [];
+		}
 
 		// Compare each indexed document with what it _should_ be if it were re-indexed now
 		foreach ( $documents as $document ) {
 			$prepared_document = $indexable->prepare_document( $document['post_id'] );
 
 			$diff = $inspect ? self::diff_document_and_prepared_document( $document, $prepared_document )
-			                 : self::simplified_diff_document_and_prepared_document( $document, $prepared_document ); // phpcs:ignore Generic.WhiteSpace.DisallowSpaceIndent.SpacesUsed
+							: self::simplified_diff_document_and_prepared_document( $document, $prepared_document ); // phpcs:ignore Generic.WhiteSpace.DisallowSpaceIndent.SpacesUsed
 
 			if ( $diff ) {
 				$key           = self::get_post_key( $document['ID'] );
-				$diffs[ $key ] = $inspect ? $diff
-				                          : self::simplified_format_post_diff( $document['ID'], 'inconsistent' ); // phpcs:ignore Generic.WhiteSpace.DisallowSpaceIndent.SpacesUsed
+				$diffs[ $key ] = $inspect ? $diff : self::simplified_format_post_diff( $document['ID'], 'mismatch' );
 			}
 		}
 
@@ -586,14 +739,28 @@ class Health {
 	}
 
 	public static function simplified_diff_document_and_prepared_document( $document, $prepared_document ) {
+		$checked_keys = [];
+
 		foreach ( $document as $key => $value ) {
+			$checked_keys[ $key ] = true;
 			if ( in_array( $key, self::DOCUMENT_IGNORED_KEYS, true ) ) {
 				continue;
 			}
 
+			$prepared_value = $prepared_document[ $key ] ?? null;
 			if ( is_array( $value ) ) {
-				$recursive_diff = self::simplified_diff_document_and_prepared_document( $document[ $key ], $prepared_document[ $key ] );
-			} elseif ( $prepared_document[ $key ] != $document[ $key ] ) { // Intentionally weak comparison b/c some types like doubles don't translate to JSON
+				$recursive_diff = self::simplified_diff_document_and_prepared_document( $value, is_array( $prepared_value ) ? $prepared_value : [] );
+				if ( $recursive_diff ) {
+					return true;
+				}
+			} elseif ( $prepared_value != $value ) { // Intentionally weak comparison b/c some types like doubles don't translate to JSON
+				return true;
+			}
+		}
+
+		// Check that there is no missing key that would only be on $prepared_document
+		foreach ( $prepared_document as $key => $value ) {
+			if ( ! array_key_exists( $key, $checked_keys ) ) {
 				return true;
 			}
 		}
@@ -602,23 +769,36 @@ class Health {
 	}
 
 	public static function diff_document_and_prepared_document( $document, $prepared_document ) {
-		$diff = [];
+		$diff         = [];
+		$checked_keys = [];
 
 		foreach ( $document as $key => $value ) {
+			$checked_keys[ $key ] = true;
 			if ( in_array( $key, self::DOCUMENT_IGNORED_KEYS, true ) ) {
 				continue;
 			}
 
+			$prepared_value = $prepared_document[ $key ] ?? null;
 			if ( is_array( $value ) ) {
-				$recursive_diff = self::diff_document_and_prepared_document( $document[ $key ], $prepared_document[ $key ] );
+				$recursive_diff = self::diff_document_and_prepared_document( $value, is_array( $prepared_value ) ? $prepared_value : [] );
 
 				if ( ! empty( $recursive_diff ) ) {
 					$diff[ $key ] = $recursive_diff;
 				}
-			} elseif ( $prepared_document[ $key ] != $document[ $key ] ) { // Intentionally weak comparison b/c some types like doubles don't translate to JSON
+			} elseif ( $prepared_value != $value ) { // Intentionally weak comparison b/c some types like doubles don't translate to JSON
 				$diff[ $key ] = array(
-					'expected' => $prepared_document[ $key ],
-					'actual'   => $document[ $key ],
+					'expected' => $prepared_document[ $key ] ?? null,
+					'actual'   => $value,
+				);
+			}
+		}
+
+		// Check that there is no missing key that would only be on $prepared_document
+		foreach ( $prepared_document as $key => $value ) {
+			if ( ! array_key_exists( $key, $checked_keys ) ) {
+				$diff[ $key ] = array(
+					'expected' => $value,
+					'actual'   => null,
 				);
 			}
 		}
@@ -633,18 +813,27 @@ class Health {
 	/**
 	 * Iterate over an array of inconsistencies and address accordingly.
 	 *
-	 * If an object is missing from the index or inconsistent - add it to the queue for the sweep.
+	 * If an object is missing from the index or mismatched - add it to the queue for the sweep.
 	 *
 	 * If an object is missing from the DB, remove it from the index.
 	 *
-	 * @param array $diff array of inconsistenices in the following shape: [ id => string, type => string (Indexable), issue => <missing_from_index|extra_in_index|inconsistent> ].
+	 * @param array $diff array of inconsistenices in the following shape: [ id => string, type => string (Indexable), issue => <missing_from_index|extra_in_index|mismatch> ].
 	 */
 	public static function reconcile_diff( array $diff ) {
-		foreach ( $diff as $key => $obj_to_reconcile ) {
+		foreach ( $diff as $obj_to_reconcile ) {
 			switch ( $obj_to_reconcile['issue'] ) {
 				case 'missing_from_index':
-				case 'inconsistent':
-					\Automattic\VIP\Search\Search::instance()->queue->queue_object( $obj_to_reconcile['id'], $obj_to_reconcile['type'] );
+				case 'mismatch':
+					/**
+					 * Filter to determine the priority of the reindex job
+					 *
+					 * @param int $priority         Job priority
+					 * @param int $object_id        Object ID
+					 * @param string $object_type   Object type
+					 * @return int                  Job priority
+					 */
+					$priority = apply_filters( 'vip_healthcheck_reindex_priority', self::REINDEX_JOB_DEFAULT_PRIORITY, $obj_to_reconcile['id'], $obj_to_reconcile['type'] );
+					\Automattic\VIP\Search\Search::instance()->queue->queue_object( $obj_to_reconcile['id'], $obj_to_reconcile['type'], [ 'priority' => $priority ] );
 					break;
 				case 'extra_in_index':
 					\ElasticPress\Indexables::factory()->get( 'post' )->delete( $obj_to_reconcile['id'], false );
@@ -653,12 +842,55 @@ class Health {
 		}
 	}
 
-	public static function get_last_post_id() {
+	/**
+	 * Get the last post ID from the database.
+	 *
+	 * @return int $last_db_id The last post ID from the database.
+	 */
+	public static function get_last_db_post_id() {
 		global $wpdb;
 
-		$last = $wpdb->get_var( "SELECT MAX( `ID` ) FROM $wpdb->posts" );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$last_db_id = $wpdb->get_var( "SELECT MAX( `ID` ) FROM $wpdb->posts" );
 
-		return (int) $last;
+		return (int) $last_db_id;
+	}
+
+	/**
+	 * Get the last post ID from Elasticsearch.
+	 *
+	 * @return int $last_es_id The last post ID from ES.
+	 */
+	public static function get_last_es_post_id() {
+		$indexable = \ElasticPress\Indexables::factory()->get( 'post' );
+
+		if ( $indexable ) {
+			$query_args     = [
+				'posts_per_page' => 1,
+				'orderby'        => 'ID',
+				'order'          => 'desc',
+				'fields'         => 'ids',
+			];
+			$query          = self::query_objects( $query_args, 'post' );
+			$formatted_args = $indexable->format_args( $query->query_vars, $query );
+			$es_result      = $indexable->query_es( $formatted_args, $query->query_vars );
+		}
+		$last_es_id = $es_result['documents'][0]['post_id'] ?? false;
+
+		return (int) $last_es_id;
+	}
+
+	/**
+	 * Get the latter post ID between the database and Elasticsearch.
+	 *
+	 * @return int $last The latter post ID.
+	 */
+	public static function get_last_post_id() {
+		$last_db_id = self::get_last_db_post_id();
+		$last_es_id = self::get_last_es_post_id();
+		$last       = max( $last_db_id, $last_es_id );
+
+		return $last;
 	}
 
 	public static function get_document_ids_for_batch( $start_post_id, $last_post_id ) {
@@ -711,6 +943,10 @@ class Health {
 		$unhealthy = array();
 
 		foreach ( $indexables as $indexable ) {
+			if ( ! $indexable->index_exists() ) {
+				continue;
+			}
+
 			$diff = $this->get_index_versions_settings_diff_for_indexable( $indexable );
 
 			if ( is_wp_error( $diff ) ) {
@@ -732,22 +968,16 @@ class Health {
 	public function get_index_versions_settings_diff_for_indexable( \ElasticPress\Indexable $indexable ) {
 		$versions = $this->search->versioning->get_versions( $indexable );
 
-		$diff = array();
+		$diff = [];
 
 		foreach ( $versions as $version ) {
-			$version_diff = $this->get_index_settings_diff_for_indexable( $indexable, array(
+			$version_result = $this->get_index_settings_diff_for_indexable( $indexable, array(
 				'index_version' => $version['number'],
 			) );
 
-			if ( empty( $version_diff ) ) {
-				continue;
+			if ( is_array( $version_result ) && ! empty( $version_result ) ) {
+				$diff[] = $version_result;
 			}
-
-			$diff[] = array(
-				'index_version' => $version['number'],
-				'index_name' => $indexable->get_index_name(),
-				'diff' => $version_diff,
-			);
 		}
 
 		return $diff;
@@ -762,25 +992,38 @@ class Health {
 			}
 		}
 
-		$actual_settings = $indexable->get_index_settings();
+		$diff = [];
 
-		if ( is_wp_error( $actual_settings ) ) {
-			$this->search->versioning->reset_current_version_number( $indexable );
+		if ( $indexable->index_exists() ) {
+			$actual_settings = $indexable->get_index_settings();
 
-			return $actual_settings;
+			if ( is_wp_error( $actual_settings ) ) {
+				$this->search->versioning->reset_current_version_number( $indexable );
+
+				return $actual_settings;
+			}
+
+			$desired_settings = $indexable->build_settings();
+
+			// We only monitor certain settings
+			$actual_settings_to_check  = self::limit_index_settings_to_keys( $actual_settings, self::INDEX_SETTINGS_HEALTH_MONITORED_KEYS );
+			$desired_settings_to_check = self::limit_index_settings_to_keys( $desired_settings, self::INDEX_SETTINGS_HEALTH_MONITORED_KEYS );
+
+			$diff = self::get_index_settings_diff( $actual_settings_to_check, $desired_settings_to_check );
 		}
 
-		$desired_settings = $indexable->build_settings();
-
-		// We only monitor certain settings
-		$actual_settings_to_check = self::limit_index_settings_to_keys( $actual_settings, self::INDEX_SETTINGS_HEALTH_MONITORED_KEYS );
-		$desired_settings_to_check = self::limit_index_settings_to_keys( $desired_settings, self::INDEX_SETTINGS_HEALTH_MONITORED_KEYS );
-
-		$diff = self::get_index_settings_diff( $actual_settings_to_check, $desired_settings_to_check );
+		$result = [];
+		if ( ! empty( $diff ) ) {
+			$result = array(
+				'index_version' => $options['index_version'] ?? 1,
+				'index_name'    => $indexable->get_index_name(),
+				'diff'          => $diff,
+			);
+		}
 
 		$this->search->versioning->reset_current_version_number( $indexable );
 
-		return $diff;
+		return $result;
 	}
 
 	public static function limit_index_settings_to_keys( $settings, $keys ) {
@@ -800,6 +1043,11 @@ class Health {
 				if ( ! empty( $recursive_diff ) ) {
 					$diff[ $key ] = $recursive_diff;
 				}
+			} elseif ( ! isset( $actual_settings[ $key ] ) ) {
+				$diff[ $key ] = array(
+					'expected' => $desired_settings[ $key ],
+					'actual'   => 'N/A',
+				);
 			} elseif ( $actual_settings[ $key ] != $desired_settings[ $key ] ) { // Intentionally weak comparison b/c some types like doubles don't translate to JSON
 				$diff[ $key ] = array(
 					'expected' => $desired_settings[ $key ],
@@ -827,15 +1075,48 @@ class Health {
 
 		$result = $indexable->update_index_settings( $desired_settings_to_heal );
 
-		$index_name = $indexable->get_index_name();
+		$index_name    = $indexable->get_index_name();
 		$index_version = $this->search->versioning->get_current_version_number( $indexable );
 
 		$this->search->versioning->reset_current_version_number( $indexable );
 
 		return array(
-			'index_name' => $index_name,
+			'index_name'    => $index_name,
 			'index_version' => $index_version,
-			'result' => $result,
+			'result'        => $result,
 		);
+	}
+	/**
+	 * Fetches the count of entities in ES indexable
+	 *
+	 * @since   1.0.0
+	 * @access  public
+	 * @param mixed $indexable Instance of an ElasticPress Indexable Object to search on
+	 * @param array $options options:
+	 *     index_version: if provided that version will be use instead of default
+	 * @return int
+	 */
+	public function index_count( \ElasticPress\Indexable $indexable, array $options = array() ) {
+		if ( isset( $options['index_version'] ) ) {
+			$this->search->versioning->set_current_version_number( $indexable, $options['index_version'] );
+		}
+		$index = $indexable->get_index_name();
+
+		$response      = $this->elasticsearch->remote_request( $index . '/_count' );
+		$response_code = (int) wp_remote_retrieve_response_code( $response );
+
+		$result = 0;
+		if ( 200 === $response_code ) {
+			$response_body_json = wp_remote_retrieve_body( $response );
+			$response_body      = json_decode( $response_body_json, true );
+
+			$result = $response_body['count'] ?? 0;
+		}
+
+		if ( isset( $options['index_version'] ) ) {
+			$this->search->versioning->reset_current_version_number( $indexable );
+		}
+
+		return $result;
 	}
 }

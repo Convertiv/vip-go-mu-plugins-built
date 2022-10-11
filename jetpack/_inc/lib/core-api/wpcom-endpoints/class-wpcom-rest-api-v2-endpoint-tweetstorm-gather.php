@@ -2,11 +2,9 @@
 /**
  * REST API endpoint for the Gathering Tweetstorms block.
  *
- * @package Jetpack
+ * @package automattic/jetpack
  * @since 8.7.0
  */
-
-use Automattic\Jetpack\Connection\Client;
 
 /**
  * Tweetstorm gatherer.
@@ -32,7 +30,7 @@ class WPCOM_REST_API_V2_Endpoint_Tweetstorm_Gather extends WP_REST_Controller {
 		}
 
 		if ( ! class_exists( 'Jetpack_Tweetstorm_Helper' ) ) {
-			\jetpack_require_lib( 'class-jetpack-tweetstorm-helper' );
+			require_once JETPACK__PLUGIN_DIR . '_inc/lib/class-jetpack-tweetstorm-helper.php';
 		}
 
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
@@ -46,17 +44,19 @@ class WPCOM_REST_API_V2_Endpoint_Tweetstorm_Gather extends WP_REST_Controller {
 			$this->namespace,
 			$this->rest_base,
 			array(
-				'args'                                  => array(
+				'args'                           => array(
 					'url' => array(
 						'description' => __( 'The tweet URL to gather from.', 'jetpack' ),
 						'type'        => 'string',
 						'required'    => true,
 					),
 				),
-				'methods'                               => WP_REST_Server::READABLE,
-				'callback'                              => array( $this, 'gather_tweetstorm' ),
-				'allow_blog_token_when_site_is_private' => true,
-				'permission_callback'                   => '__return_true',
+				'methods'                        => WP_REST_Server::READABLE,
+				'callback'                       => array( $this, 'gather_tweetstorm' ),
+				'private_site_security_settings' => array(
+					'allow_blog_token_access' => true,
+				),
+				'permission_callback'            => array( 'Jetpack_Tweetstorm_Helper', 'permissions_check' ),
 			)
 		);
 	}

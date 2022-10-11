@@ -8,6 +8,8 @@
 
 namespace ElasticPress;
 
+use ElasticPress\Utils;
+
 /**
  * Abstract sync manager class to be extended for each indexable
  */
@@ -51,9 +53,14 @@ abstract class SyncManager {
 		add_action( 'shutdown', [ $this, 'index_sync_queue' ] );
 		add_filter( 'wp_redirect', [ $this, 'index_sync_queue_on_redirect' ], 10, 1 );
 
-		// Add machines permission check bypass
-		add_filter( 'ep_sync_insert_permissions_bypass', array( $this, 'filter_bypass_permission_checks_for_machines' ), 10, 3 );
-		add_filter( 'ep_sync_delete_permissions_bypass', array( $this, 'filter_bypass_permission_checks_for_machines' ), 10, 3 );
+		/**
+		 * Actions for multisite
+		 */
+		add_action( 'delete_blog', array( $this, 'action_delete_blog_from_index' ) );
+		add_action( 'make_delete_blog', array( $this, 'action_delete_blog_from_index' ) );
+		add_action( 'make_spam_blog', array( $this, 'action_delete_blog_from_index' ) );
+		add_action( 'archive_blog', array( $this, 'action_delete_blog_from_index' ) );
+		add_action( 'deactivate_blog', array( $this, 'action_delete_blog_from_index' ) );
 
 		// Implemented by children.
 		$this->setup();
@@ -156,7 +163,7 @@ abstract class SyncManager {
 		 *
 		 * @hook pre_ep_index_sync_queue
 		 * @param {boolean} $bail True to skip the rest of index_sync_queue(), false to continue normally
-		 * @param {\ElasticPress\SyncManager} $sync_manager SyncManager instance for the indexable
+		 * @param {SyncManager} $sync_manager SyncManager instance for the indexable
 		 * @param {string} $indexable_slug Slug of the indexable being synced
 		 * @since 3.5
 		 */
@@ -188,26 +195,75 @@ abstract class SyncManager {
 	}
 
 	/**
-	 * Filter to allow cron and WP CLI processes to index/delete documents
+	 * Check if we can index content in the current blog
 	 *
-	 * @param  boolean $bypass The current filtered value
-	 * @param  int     $entity_id The id of the post being checked
-	 * @param  string  $slug The slug of the indexable
-	 * @return boolean Boolean indicating if permission checking should be bypased or not
-	 * @since  3.5
+	 * @since 3.5
+	 * @return boolean
 	 */
-	public function filter_bypass_permission_checks_for_machines( $bypass, $entity_id, $slug ) {
-		// Allow index/delete during cron
-		if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
-			return true;
+	public function can_index_site() {
+		if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
+			return Utils\is_site_indexable();
 		}
 
-		// Allow index/delete during WP CLI commands
-		if ( defined( 'WP_CLI' ) && WP_CLI ) {
-			return true;
+		return true;
+	}
+
+	/**
+	 * Determine whether syncing an indexable should take place.
+	 *
+	 * Returns true or false depending on the value of the WP_IMPORTING global.
+	 * Contains the 'ep_sync_indexable_kill' filter that enables overriding the default behavior.
+	 *
+	 * @since 3.4.2
+	 * @return bool
+	 */
+	public function kill_sync() {
+
+		$is_importing = defined( 'WP_IMPORTING' ) && true === WP_IMPORTING;
+
+		/**
+		 * Filter whether to bypass sync.
+		 *
+		 * @since 3.4.2
+		 * @hook  ep_sync_indexable_kill
+		 * @param {boolean} $kill True if WP_IMPORTING is defined and true, else false.
+		 * @param {array} $indexable_slug Indexable slug.
+		 */
+		return apply_filters( 'ep_sync_indexable_kill', $is_importing, $this->indexable_slug );
+	}
+
+	/**
+	 * Remove blog from index when a site is deleted, archived, or deactivated
+	 *
+	 * @param int $blog_id WP Blog ID.
+	 */
+	public function action_delete_blog_from_index( $blog_id ) {
+		if ( $this->kill_sync() ) {
+			return;
 		}
 
-		return $bypass;
+		$indexable = Indexables::factory()->get( $this->indexable_slug );
+
+		// Don't delete global indexes
+		if ( $indexable->global ) {
+			return;
+		}
+
+		/**
+		 * Filter to whether to keep index on site deletion
+		 *
+		 * @hook ep_keep_index
+		 * @since 3.0
+		 * @since 3.6.2 Moved from Post\SyncManager to the main SyncManager class
+		 * @since 3.6.5 Added `$blog_id` and `$indexable_slug`
+		 * @param {bool}   $keep           True means don't delete index
+		 * @param {int}    $blog_id        WP Blog ID
+		 * @param {string} $indexable_slug Indexable slug
+		 * @return {bool} New value
+		 */
+		if ( $indexable->index_exists( $blog_id ) && ! apply_filters( 'ep_keep_index', false, $blog_id, $this->indexable_slug ) ) {
+			$indexable->delete_index( $blog_id );
+		}
 	}
 
 	/**

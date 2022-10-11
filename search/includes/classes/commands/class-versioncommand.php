@@ -3,7 +3,6 @@
 namespace Automattic\VIP\Search\Commands;
 
 use \WP_CLI;
-use \WP_CLI\Utils;
 use \ElasticPress\Indexable as Indexable;
 
 /**
@@ -12,20 +11,17 @@ use \ElasticPress\Indexable as Indexable;
  * @package Automattic\VIP\Search
  */
 class VersionCommand extends \WPCOM_VIP_CLI_Command {
-	private const SUCCESS_ICON = "\u{2705}"; // unicode check mark
-	private const FAILURE_ICON = "\u{274C}"; // unicode cross mark
-
 	/**
 	 * Register a new index version
 	 *
 	 * ## OPTIONS
-	 * 
+	 *
 	 * <type>
 	 * : The index type (the slug of the Indexable, such as 'post', 'user', etc)
 	 *
 	 * [--network-wide]
 	 * : Optional - add a new version to all subsites
-	 * 
+	 *
 	 * ## EXAMPLES
 	 *     wp vip-search index-versions add post
 	 *     wp vip-search index-versions add post --network-wide
@@ -86,10 +82,10 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 * Get details about a version of an index
 	 *
 	 * ## OPTIONS
-	 * 
+	 *
 	 * <type>
 	 * : The index type (the slug of the Indexable, such as 'post', 'user', etc)
-	 * 
+	 *
 	 * <version_number>
 	 * : The version number to retrieve
 	 *
@@ -103,7 +99,7 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 */
 	public function get( $args, $assoc_args ) {
 		$type = $args[0];
-	
+
 		$search = \Automattic\VIP\Search\Search::instance();
 
 		$indexable = \ElasticPress\Indexables::factory()->get( $type );
@@ -137,7 +133,7 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 				}
 
 				$version['blog_id'] = $site['blog_id'];
-				$version['url'] = $site['domain'] . $site['path'];
+				$version['url']     = $site['domain'] . $site['path'];
 
 				$versions[] = $version;
 			}
@@ -162,7 +158,7 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 * List all registered index versions
 	 *
 	 * ## OPTIONS
-	 * 
+	 *
 	 * <type>
 	 * : The index type (the slug of the Indexable, such as 'post', 'user', etc)
 	 *
@@ -179,8 +175,9 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 */
 	public function list( $args, $assoc_args ) {
 		$type = $args[0];
-	
+
 		$search = \Automattic\VIP\Search\Search::instance();
+		$health = new \Automattic\VIP\Search\Health( $search );
 
 		$indexable = \ElasticPress\Indexables::factory()->get( $type );
 
@@ -202,29 +199,36 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 
 				$site_versions = $search->versioning->get_versions( $indexable );
 
-				restore_current_blog();
-
 				if ( is_wp_error( $site_versions ) ) {
-					return WP_CLI::error( $result->get_error_message() );
+					restore_current_blog();
+					return WP_CLI::error( $site_versions->get_error_message() );
 				}
 
 				foreach ( $site_versions as &$version ) {
-					$version['blog_id'] = $site['blog_id'];
-					$version['url'] = $site['domain'] . $site['path'];
+					$version['blog_id']        = $site['blog_id'];
+					$version['url']            = $site['domain'] . $site['path'];
+					$version['document_count'] = $health->index_count( $indexable, [ 'index_version' => $version['number'] ] );
 				}
+
+				unset( $version );
+				restore_current_blog();
 
 				$versions = array_merge( $versions, $site_versions );
 			}
 
-			\WP_CLI\Utils\format_items( $assoc_args['format'] ?? 'table', $versions, array( 'blog_id', 'url', 'number', 'active', 'created_time', 'activated_time' ) );
+			\WP_CLI\Utils\format_items( $assoc_args['format'] ?? 'table', $versions, array( 'blog_id', 'url', 'number', 'active', 'created_time', 'activated_time', 'document_count' ) );
 		} else {
 			$versions = $search->versioning->get_versions( $indexable );
 
-			if ( is_wp_error( $versions ) ) {
-				return WP_CLI::error( $result->get_error_message() );
+			foreach ( $versions as &$version ) {
+				$version['document_count'] = $health->index_count( $indexable, [ 'index_version' => $version['number'] ] );
 			}
 
-			\WP_CLI\Utils\format_items( $assoc_args['format'] ?? 'table', $versions, array( 'number', 'active', 'created_time', 'activated_time' ) );
+			if ( is_wp_error( $versions ) ) {
+				return WP_CLI::error( $versions->get_error_message() );
+			}
+
+			\WP_CLI\Utils\format_items( $assoc_args['format'] ?? 'table', $versions, array( 'number', 'active', 'created_time', 'activated_time', 'document_count' ) );
 		}
 	}
 
@@ -232,13 +236,16 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 * Activate a version of an index. This will start sending all requests to the index version specified
 	 *
 	 * ## OPTIONS
-	 * 
+	 *
 	 * <type>
 	 * : The index type (the slug of the Indexable, such as 'post', 'user', etc)
-	 * 
+	 *
 	 * <version_number>
 	 * : The version number of the index to activate
-	 * 
+	 *
+	 * [--skip-confirm]
+	 * : Skip confirmation
+	 *
 	 * [--network-wide]
 	 * : Optional - activate the version to all subsites. Best used with version aliases like `next` instead of individual version numbers
 	 *
@@ -248,8 +255,13 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 * @subcommand activate
 	 */
 	public function activate( $args, $assoc_args ) {
-		$type = $args[0];
+		$type                   = $args[0];
 		$desired_version_number = $args[1];
+		if ( $assoc_args['skip-confirm'] ?? '' ) {
+			// WP_CLI::confirm looks for 'yes', but we use skip-confirm to be consistent with other commands
+			$assoc_args['yes'] = true;
+		}
+
 
 		$indexable = \ElasticPress\Indexables::factory()->get( $type );
 
@@ -314,22 +326,20 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 		$active_version_number = $search->versioning->get_active_version_number( $indexable );
 
 		if ( $active_version_number === $new_version_number ) {
-			return WP_CLI::error( sprintf( 'Index version %d is already active for type %s', $new_version_number, $type ) );
+			return WP_CLI::error( sprintf( 'Index version %d is already active', $new_version_number ) );
 		}
 
-		$result = $search->versioning->activate_version( $indexable, $new_version_number );
-
-		return $result;
+		return $search->versioning->activate_version( $indexable, $new_version_number );
 	}
 
 	/**
 	 * Delete a version of an index. This will unregister the index version and delete it from Elasticsearch
 	 *
 	 * ## OPTIONS
-	 * 
+	 *
 	 * <type>
 	 * : The index type (the slug of the Indexable, such as 'post', 'user', etc)
-	 * 
+	 *
 	 * <version_number>
 	 * : The version number of the index to delete
 	 *
@@ -346,7 +356,7 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 	 */
 	public function delete( $args, $assoc_args ) {
 		$type = $args[0];
-	
+
 		$search = \Automattic\VIP\Search\Search::instance();
 
 		$indexable = \ElasticPress\Indexables::factory()->get( $type );
@@ -356,7 +366,7 @@ class VersionCommand extends \WPCOM_VIP_CLI_Command {
 		}
 
 		CoreCommand::confirm_destructive_operation( $assoc_args );
-	
+
 		if ( isset( $assoc_args['network-wide'] ) && is_multisite() ) {
 			if ( ! is_numeric( $assoc_args['network-wide'] ) ) {
 				$assoc_args['network-wide'] = 0;

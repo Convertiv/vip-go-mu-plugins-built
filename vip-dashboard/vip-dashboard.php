@@ -1,11 +1,11 @@
 <?php
 /*
  * Plugin Name: VIP Dashboard
- * Plugin URI: http://wpvip.com
+ * Plugin URI: https://wpvip.com
  * Description: WordPress VIP Go Dashboard
- * Author: Scott Evans, Filipe Varela
- * Version: 2.1.0
- * Author URI: http://wpvip.com
+ * Author: Scott Evans, Filipe Varela, Pau Argelaguet
+ * Version: 3.0.0
+ * Author URI: https://wpvip.com
  * License: GPLv2 or later
  * License URI: http://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: vip-dashboard
@@ -18,35 +18,38 @@
  * @return void
  */
 function vip_dashboard_init() {
-
 	if ( ! is_admin() ) {
 		return;
 	}
 
+	// Loading components
+	require_once 'components/header.php';
+	require_once 'components/widget-welcome.php';
+	require_once 'components/widget-contact.php';
+
 	// Enable menu for all sites using a VIP and a8c sites.
 	add_action( 'admin_menu', 'wpcom_vip_admin_menu', 5 );
 	add_action( 'admin_menu', 'wpcom_vip_rename_vip_menu_to_dashboard', 50 );
-
 }
 add_action( 'plugins_loaded', 'vip_dashboard_init' );
 
 /**
- * Register master stylesheet (compiled via gulp)
+ * Register master stylesheet
  *
  * @return void
  */
 function vip_dashboard_admin_styles() {
-	wp_register_style( 'vip-dashboard-style', plugins_url( '/assets/css/style.css', __FILE__ ) , '1.0' );
+	wp_register_style( 'vip-dashboard-style', plugins_url( '/assets/css/style.css', __FILE__ ), [], '1.0' );
 	wp_enqueue_style( 'vip-dashboard-style' );
 }
 
 /**
- * Register master JavaScript (compiled via gulp)
+ * Register master JavaScript
  *
  * @return void
  */
 function vip_dashboard_admin_scripts() {
-	wp_register_script( 'vip-dashboard-script', plugins_url( '/assets/js/vip-dashboard.js', __FILE__ ), array( 'jquery' ), '1.0', true );
+	wp_register_script( 'vip-dashboard-script', plugins_url( '/assets/js/vip-dashboard.js', __FILE__ ), array( 'jquery' ), '3.0', true );
 	wp_enqueue_script( 'vip-dashboard-script' );
 }
 
@@ -56,19 +59,15 @@ function vip_dashboard_admin_scripts() {
  * @return void
  */
 function vip_dashboard_page() {
-
-	$current_user = wp_get_current_user();
-	$name         = $current_user->display_name;
-	$email        = $current_user->user_email;
-	$ajaxurl      = add_query_arg( array( '_wpnonce' => wp_create_nonce( 'vip-dashboard' ) ), untrailingslashit( admin_url( 'admin-ajax.php' ) ) );
 	?>
-	<div id="app"
-		data-ajaxurl="<?php echo esc_url( $ajaxurl ); ?>"
-		data-asseturl="<?php echo esc_attr( plugins_url( '/assets/', __FILE__ ) ); ?>"
-		data-email="<?php echo esc_attr( $email ); ?>"
-		data-name="<?php echo esc_attr( $name ); ?>"
-		data-adminurl="<?php echo esc_url( admin_url( 'admin.php' ) ); ?>"
-	></div>
+	<main role="main">
+		<?php render_vip_dashboard_header(); ?>
+
+		<div class="widgets-area">
+			<?php render_vip_dashboard_widget_welcome(); ?>
+			<?php render_vip_dashboard_widget_contact(); ?>
+		</div>
+	</main>
 	<?php
 }
 
@@ -81,16 +80,17 @@ function vip_contact_form_handler() {
 
 	if ( ! isset( $_POST['body'], $_POST['subject'], $_GET['_wpnonce'] ) ) {
 		$return = array(
-			'status' => 'error',
+			'status'  => 'error',
 			'message' => __( 'Please complete all required fields.', 'vip-dashboard' ),
 		);
 		echo wp_json_encode( $return );
 		die();
 	}
 
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 	if ( ! wp_verify_nonce( $_GET['_wpnonce'], 'vip-dashboard' ) ) {
 		$return = array(
-			'status' => 'error',
+			'status'  => 'error',
 			'message' => __( 'Security check failed. Make sure you should be doing this, and try again.', 'vip-dashboard' ),
 		);
 		echo wp_json_encode( $return );
@@ -100,27 +100,24 @@ function vip_contact_form_handler() {
 	$vipsupportemailaddy  = 'vip-support@wordpress.com';
 	$cc_headers_to_kayako = '';
 
-	$sendemail    = true;
-	$emailsent    = false;
 	$current_user = wp_get_current_user();
 
-	$name          = ( ! empty( $_POST['name'] ) ) ? strip_tags( stripslashes( $_POST['name'] ) ) : $current_user->display_name;
-	$email         = ( ! empty( $_POST['email'] ) ) ? strip_tags( stripslashes( $_POST['email'] ) ) : $current_user->user_email;
+	$name  = ( ! empty( $_POST['name'] ) ) ? stripslashes( wp_strip_all_tags( $_POST['name'] ) ) : $current_user->display_name;
+	$email = ( ! empty( $_POST['email'] ) ) ? stripslashes( wp_strip_all_tags( $_POST['email'] ) ) : $current_user->user_email;
 
 	if ( ! is_email( $email ) ) {
 		$return = array(
-			'status' => 'error',
+			'status'  => 'error',
 			'message' => __( 'Please enter a valid email for your ticket.', 'vip-dashboard' ),
 		);
 		echo wp_json_encode( $return );
 		die();
 	}
 
-	$subject       = ( ! empty( $_POST['subject'] ) ) ? strip_tags( stripslashes( $_POST['subject'] ) ) : '';
-	$group         = ( ! empty( $_POST['type'] ) ) ? strip_tags( stripslashes( $_POST['type'] ) ) : 'Technical';
-	$priority      = ( ! empty( $_POST['priority'] ) ) ? strip_tags( stripslashes( $_POST['priority'] ) ) : 'Medium';
+	$subject  = ( ! empty( $_POST['subject'] ) ) ? stripslashes( wp_strip_all_tags( $_POST['subject'] ) ) : '';
+	$priority = ( ! empty( $_POST['priority'] ) ) ? stripslashes( wp_strip_all_tags( $_POST['priority'] ) ) : 'Medium';
 
-	$ccemail       = ( ! empty( $_POST['cc'] ) ) ? strip_tags( stripslashes( $_POST['cc'] ) ) : '';
+	$ccemail       = ( ! empty( $_POST['cc'] ) ) ? stripslashes( wp_strip_all_tags( $_POST['cc'] ) ) : '';
 	$temp_ccemails = explode( ',', $ccemail );
 	$temp_ccemails = array_filter( array_map( 'trim', $temp_ccemails ) );
 	$ccemails      = array();
@@ -140,7 +137,7 @@ function vip_contact_form_handler() {
 
 	if ( empty( $subject ) ) {
 		$return = array(
-			'status' => 'error',
+			'status'  => 'error',
 			'message' => __( 'Please enter a descriptive subject for your ticket.', 'vip-dashboard' ),
 		);
 		echo wp_json_encode( $return );
@@ -149,7 +146,7 @@ function vip_contact_form_handler() {
 
 	if ( '' === $_POST['body'] ) {
 		$return = array(
-			'status' => 'error',
+			'status'  => 'error',
 			'message' => __( 'Please enter a detailed description of your issue.', 'vip-dashboard' ),
 		);
 		echo wp_json_encode( $return );
@@ -159,6 +156,8 @@ function vip_contact_form_handler() {
 	if ( 'Emergency' === $priority ) {
 		$subject = sprintf( '[%s] %s', $priority, $subject );
 	}
+
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 	$content = stripslashes( $_POST['body'] ) . "\n\n--- Ticket Details --- \n";
 
 	if ( $priority ) {
@@ -167,16 +166,14 @@ function vip_contact_form_handler() {
 	$content .= "\nUser: " . $current_user->user_login . ' | ' . $current_user->display_name;
 
 	// VIP DB.
-	$theme = wp_get_theme();
+	$theme    = wp_get_theme();
 	$content .= "\nSite Name: " . get_bloginfo( 'name' );
 	$content .= "\nSite URLs: " . site_url() . ' | ' . admin_url();
 	$content .= "\nTheme: " . get_option( 'stylesheet' ) . ' | ' . $theme->get( 'Name' );
 
-	// added for VIPv2.
-	$content .= "\nPlatform: VIP Go";
-
 	// send date and time.
-	$content .= sprintf( "\n\nSent from %s on %s", home_url(), date( 'c', current_time( 'timestamp', 1 ) ) );
+	// phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- ISO 8601 date includes the TZ info
+	$content .= sprintf( "\n\nSent from %s on %s", home_url(), date( 'c', time() ) );
 
 	// Filter from name/email. NOTE - not un-hooking the filter because we die() immediately after wp_mail()
 	add_filter( 'wp_mail_from', function() use ( $email ) {
@@ -188,9 +185,10 @@ function vip_contact_form_handler() {
 	});
 
 	$headers = "From: \"$name\" <$email>\r\n";
+	// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.wp_mail_wp_mail
 	if ( wp_mail( $vipsupportemailaddy, $subject, $content, $headers . $cc_headers_to_kayako ) ) {
 		$return = array(
-			'status' => 'success',
+			'status'  => 'success',
 			'message' => __( 'Your support request is on its way, we will be in touch soon.', 'vip-dashboard' ),
 		);
 
@@ -199,16 +197,15 @@ function vip_contact_form_handler() {
 
 	} else {
 		$manual_link = vip_echo_mailto_vip_hosting( __( 'Please send in a request manually.', 'vip-dashboard' ), false );
-		$return = array(
-			'status' => 'error',
-			'message' => sprintf( __( 'There was an error sending the support request. %1$s', 'vip-dashboard' ),  $manual_link ),
+		$return      = array(
+			'status'  => 'error',
+			// translators: 1 - manual email link
+			'message' => sprintf( __( 'There was an error sending the support request. %1$s', 'vip-dashboard' ), $manual_link ),
 		);
 
 		echo wp_json_encode( $return );
 		die();
 	}
-
-	die();
 }
 add_action( 'wp_ajax_vip_contact', 'vip_contact_form_handler' );
 
@@ -217,11 +214,12 @@ add_action( 'wp_ajax_vip_contact', 'vip_contact_form_handler' );
  *
  * @param string $linktext the text for the link.
  * @param bool   $echo echo or return.
- * @return html
+ * @return string
  */
 function vip_echo_mailto_vip_hosting( $linktext = 'Send an email to VIP Hosting.', $echo = true ) {
-
-	$current_user = get_currentuserinfo();
+	// phpcs:disable WordPress.Security.NonceVerification.Missing
+	// phpcs:disable WordPressVIPMinimum.Variables.RestrictedVariables
+	$current_user = wp_get_current_user();
 
 	$name = '';
 	if ( isset( $_POST['name'] ) ) {
@@ -241,22 +239,25 @@ function vip_echo_mailto_vip_hosting( $linktext = 'Send an email to VIP Hosting.
 	$email .= 'Name: ' . $name . "\n";
 	$email .= 'Email: ' . $useremail . "\n";
 	$email .= 'URL: ' . home_url() . "\n";
-	$email .= 'IP Address: ' . $_SERVER['REMOTE_ADDR'] . "\n";
+	$email .= 'IP Address: ' . ( $_SERVER['REMOTE_ADDR'] ?? 'N/A' ) . "\n"; // phpcs:ignore WordPressVIPMinimum.Variables.ServerVariables.UserControlledHeaders, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 	$email .= 'Server: ' . php_uname( 'n' ) . "\n";
-	$email .= 'Browser: ' . $_SERVER['HTTP_USER_AGENT'] . "\n";
+	$email .= 'Browser: ' . ( $_SERVER['HTTP_USER_AGENT'] ?? '-' ) . "\n";  // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- OK for text/plain
 	$email .= 'Platform: VIP Go';
 
-	$url = add_query_arg( array( 'subject' => __( 'Descriptive subject please', 'vip-dashboard' ), 'body' => rawurlencode( $email ) ), 'mailto:vip-support@wordpress.com' );
+	$url = add_query_arg( array(
+		'subject' => rawurlencode( __( 'Descriptive subject please', 'vip-dashboard' ) ),
+		'body'    => rawurlencode( $email ),
+	), 'mailto:vip-support@wordpress.com' );
 
-	// $url not escaped on output as email formatting is borked by esc_url:
-	// https://core.trac.wordpress.org/ticket/31632
-	$html = '<a href="' . $url . '">' . esc_html( $linktext ) . '</a>';
+	$html = '<a href="' . esc_url( $url ) . '">' . esc_html( $linktext ) . '</a>';
 
 	if ( $echo ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- properly sanitized above
 		echo $html;
 	}
 
 	return $html;
+	// phpcs:enable
 }
 
 /**
@@ -284,7 +285,7 @@ function wpcom_vip_admin_menu() {
 	add_action( 'admin_print_scripts-' . $page, 'vip_dashboard_admin_scripts' );
 
 	add_filter( 'custom_menu_order', '__return_true' );
-	add_filter( 'menu_order',        'wpcom_vip_menu_order' );
+	add_filter( 'menu_order', 'wpcom_vip_menu_order' );
 }
 
 /**
@@ -296,6 +297,7 @@ function wpcom_vip_rename_vip_menu_to_dashboard() {
 	global $submenu;
 
 	if ( isset( $submenu['vip-dashboard'][0][0] ) ) {
+		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
 		$submenu['vip-dashboard'][0][0] = __( 'Dashboard' );
 	}
 }

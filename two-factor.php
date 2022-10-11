@@ -6,6 +6,11 @@
  * License: GPL version 2 or later - http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
  */
 
+if ( defined( 'WP_RUN_CORE_TESTS' ) && WP_RUN_CORE_TESTS ) {
+	// Two Factor is incompatible with core tests (phpunit/tests/admin/includesPlugin.php)
+	return;
+}
+
 // Custom list of providers
 require_once __DIR__ . '/wpcom-vip-two-factor/set-providers.php';
 
@@ -23,7 +28,7 @@ function wpcom_vip_should_force_two_factor() {
 	}
 	
 	// The proxy is the second factor for VIP Support users
-	if ( true === A8C_PROXIED_REQUEST ) {
+	if ( is_proxied_automattician() ) {
 		return false;
 	}
 
@@ -58,7 +63,7 @@ function wpcom_vip_should_force_two_factor() {
 function wpcom_vip_use_custom_sso() {
 
 	$custom_sso_enabled = apply_filters( 'wpcom_vip_use_custom_sso', null );
-	if( null !== $custom_sso_enabled ) {
+	if ( null !== $custom_sso_enabled ) {
 		return $custom_sso_enabled;
 	}
 
@@ -81,8 +86,8 @@ function wpcom_vip_is_jetpack_authorize_request() {
 		// This works with the classic core XML-RPC endpoint, but not
 		// Jetpack's alternate endpoint.
 		defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST
-		&& isset( $_GET['for'] ) && 'jetpack' === $_GET['for']
-		&& isset( $GLOBALS['wp_xmlrpc_server'], $GLOBALS['wp_xmlrpc_server']->message , $GLOBALS['wp_xmlrpc_server']->message->methodName )
+		&& isset( $_GET['for'] ) && 'jetpack' === $_GET['for']  // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		&& isset( $GLOBALS['wp_xmlrpc_server'], $GLOBALS['wp_xmlrpc_server']->message, $GLOBALS['wp_xmlrpc_server']->message->methodName )
 		&& 'jetpack.remoteAuthorize' === $GLOBALS['wp_xmlrpc_server']->message->methodName
 	) || (
 		// REST Jetpack authorize request
@@ -131,7 +136,7 @@ function wpcom_vip_is_two_factor_forced() {
 
 function wpcom_vip_enforce_two_factor_plugin() {
 	if ( is_user_logged_in() ) {
-		$cap = apply_filters( 'wpcom_vip_two_factor_enforcement_cap', 'manage_options' );
+		$cap     = apply_filters( 'wpcom_vip_two_factor_enforcement_cap', 'manage_options' );
 		$limited = current_user_can( $cap );
 		
 		// Calculate current_user_can outside map_meta_cap to avoid callback loop
@@ -155,16 +160,19 @@ function wpcom_vip_enforce_two_factor_plugin() {
 	}
 }
 
-add_action( 'muplugins_loaded', 'wpcom_enable_two_factor_plugin' );
+if ( ! defined( 'WP_INSTALLING' ) ) {
+	add_action( 'muplugins_loaded', 'wpcom_enable_two_factor_plugin' );
+}
+
 function wpcom_enable_two_factor_plugin() {
 	$enable_two_factor = apply_filters( 'wpcom_vip_enable_two_factor', true );
 	if ( true !== $enable_two_factor ) {
-		return;	
+		return; 
 	}
 
 	// We loaded the two-factor plugin using wpcom_vip_load_plugin but that skips when skip-plugins is set.
 	// Switching to require_once so it no longer gets skipped
-	require_once( WPMU_PLUGIN_DIR . '/shared-plugins/two-factor/two-factor.php' );
+	require_once WPMU_PLUGIN_DIR . '/shared-plugins/two-factor/two-factor.php';
 	add_action( 'set_current_user', 'wpcom_vip_enforce_two_factor_plugin' );
 }
 
@@ -183,7 +191,7 @@ function wpcom_vip_two_factor_filter_caps( $caps, $cap, $user_id, $args ) {
 		];
 
 		// You can edit your own user account (required to set up 2FA)
-		if ( $cap === 'edit_user' && ! empty( $args ) && $user_id === $args[ 0 ] ) {
+		if ( 'edit_user' === $cap && ! empty( $args ) && $user_id === $args[0] ) {
 			$subscriber_caps[] = 'edit_user';
 		}
 

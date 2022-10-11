@@ -3,15 +3,19 @@
 namespace Automattic\VIP\Search;
 
 use \WP_CLI;
+use WP_Error;
+use WP_Post;
 
 class Search {
-	public const QUERY_COUNT_CACHE_KEY = 'query_count';
+	public const DEFAULT_ELASTICSEARCH_VERSION      = '7.5.1';
+	public const QUERY_COUNT_CACHE_KEY              = 'query_count';
 	public const QUERY_RATE_LIMITED_START_CACHE_KEY = 'query_rate_limited_start';
-	public const QUERY_COUNT_CACHE_GROUP = 'vip_search';
+	public const SEARCH_CACHE_GROUP                 = 'vip_search';
 	public const QUERY_INTEGRATION_FORCE_ENABLE_KEY = 'vip-search-enabled';
-	public const SEARCH_ALERT_SLACK_CHAT = '#vip-go-es-alerts';
-	public const SEARCH_ALERT_LEVEL = 2; // Level 2 = 'alert'
-	public const MAX_RESULT_WINDOW = 10000;
+	public const QUERY_FORCE_VERSION_PATTERN        = 'vip-search-%s-version';
+	public const SEARCH_ALERT_SLACK_CHAT            = '#vip-go-es-alerts';
+	public const SEARCH_ALERT_LEVEL                 = 2; // Level 2 = 'alert'
+	public const MAX_RESULT_WINDOW                  = 10000;
 	/**
 	 * Empty for now. Will flesh out once migration path discussions are underway and/or the same meta are added to the filter across many
 	 * sites.
@@ -60,71 +64,178 @@ class Search {
 		'advanced_seo_description',
 	);
 
+	public const ES_QUERY_RESERVED_NAMES = array(
+		'author',
+		'author__in',
+		'author__not_in',
+		'author_id',
+		'author_name',
+		'cache_results',
+		'cat',
+		'category__and',
+		'category__in',
+		'category__not_in',
+		'category_name',
+		'comment_count',
+		'date_query',
+		'day',
+		'fields',
+		'has_password',
+		'hour',
+		'ignore_sticky_posts',
+		'm',
+		'meta_compare',
+		'meta_key',
+		'meta_query',
+		'meta_value',
+		'meta_value_num',
+		'minute',
+		'monthnum',
+		'name',
+		'nopaging',
+		'offset',
+		'order',
+		'orderby',
+		'p',
+		'page',
+		'page_id',
+		'paged',
+		'pagename',
+		'perm',
+		'post__in',
+		'post__not_in',
+		'post_mime_type',
+		'post_name__in',
+		'post_parent',
+		'post_parent__in',
+		'post_parent__not_in',
+		'post_password',
+		'post_status',
+		'post_type',
+		'posts_per_archive_page',
+		'posts_per_page',
+		's',
+		'second',
+		'tag',
+		'tag__and',
+		'tag__in',
+		'tag__not_in',
+		'tag_id',
+		'tag_slug__and',
+		'tag_slug__in',
+		'tax',
+		'tax_query',
+		'update_post_meta_cache',
+		'update_post_term_cache',
+		'w',
+		'year',
+	);
+
 	public const ALLOWED_DATACENTERS = [
 		'dca',
 		'dfw',
 		'bur',
+		'ams',
 	];
+
+	// Option for storing last processed post ID
+	public const LAST_INDEXED_POST_ID_OPTION = 'vip_es_index_last_indexed_post_id';
 
 	private static $query_count_ttl;
 
-	private const MAX_SEARCH_LENGTH = 255;
-	private const DISABLE_POST_META_ALLOW_LIST = array();
-	private const STALE_QUEUE_WAIT_LIMIT = 3600; // 1 hour in seconds
-	private const POST_FIELD_COUNT_LIMIT = 5000;
+	private const DEFAULT_SEARCH_LENGTH          = 80;
+	private const MAX_SEARCH_LENGTH              = 255;
+	private const DISABLE_POST_META_ALLOW_LIST   = array();
+	private const STALE_QUEUE_WAIT_LIMIT         = 3600; // 1 hour in seconds
+	private const POST_FIELD_COUNT_LIMIT         = 5000;
 	private const QUERY_RATE_LIMITED_ALERT_LIMIT = 7200; // 2 hours in seconds
 
-	private const DEFAULT_QUERY_COUNT_TTL = 5 * \MINUTE_IN_SECONDS;
+	private const DEFAULT_QUERY_COUNT_TTL     = 5 * \MINUTE_IN_SECONDS;
 	private const LOWER_BOUND_QUERY_COUNT_TTL = 1 * \MINUTE_IN_SECONDS;
 	private const UPPER_BOUND_QUERY_COUNT_TTL = 2 * \HOUR_IN_SECONDS;
 
-	private const DEFAULT_MAX_QUERY_COUNT = 50000 + 1;
+	private const DEFAULT_MAX_QUERY_COUNT        = 50000 + 1;
 	private const LOWER_BOUND_QUERIES_PER_SECOND = 10;
 	private const UPPER_BOUND_QUERIES_PER_SECOND = 500;
 
-	private const DEFAULT_QUERY_DB_FALLBACK_VALUE = 5;
+	private const DEFAULT_QUERY_DB_FALLBACK_VALUE     = 5;
 	private const LOWER_BOUND_QUERY_DB_FALLBACK_VALUE = 1;
 	private const UPPER_BOUND_QUERY_DB_FALLBACK_VALUE = 10;
 
+	// Global timeouts used both for ES query timeout and the Search client timeout.
+	private const GLOBAL_QUERY_TIMEOUT_WEB_SEC = 2;
+	private const GLOBAL_QUERY_TIMEOUT_CLI_SEC = 5;
+
+	// Threshold for Indexable counts before increasing shards
+	private const POST_SHARD_THRESHOLD = 1000000;
+	private const USER_SHARD_THRESHOLD = 2000000;
+
 	public $healthcheck;
+	public $settings_healthcheck;
 	public $versioning_cleanup;
 	public $field_count_gauge;
 	public $queue_wait_time;
+	/** @var Queue */
 	public $queue;
+	/** @var Versioning */
+	public $versioning;
 	public $statsd;
 	public $indexables;
 	public $alerts;
 	public $logger;
+	/** @var Concurrency_Limiter */
+	public $concurrency_limiter;
 	public $time;
 	public static $stat_sampling_drop_value = 5; // Value to compare >= against rand( 1, 10 ). 5 should result in roughly half being true.
 
+	/**
+	 * Maximum number of queries before rate-limiting kicks in.
+	 *
+	 * @var int
+	 */
 	public static $max_query_count;
 	public static $query_db_fallback_value;
 
-	private static $_instance;
+	private static $instance;
 	private $current_host_index = 0;
 
 	/**
 	 * Initialize the VIP Search plugin
 	 */
 	public function init() {
+		$this->setup_collector();
 		$this->apply_settings(); // Applies filters for tweakable Search settings and should run first.
 		$this->setup_constants();
 		$this->maybe_enable_ep_query_logging();
 		$this->load_dependencies();
 		$this->setup_hooks();
-		$this->load_commands();
-		$this->setup_cron_jobs();
-		$this->setup_regular_stat_collection();
+
+		if ( defined( 'WP_CLI' ) && \WP_CLI ) {
+			$this->load_commands();
+			$this->setup_cron_jobs();
+			$this->setup_regular_stat_collection();
+		}
+	}
+
+	/**
+	 * Check if the constants needed for ElasticSearch connection are defined.
+	 *
+	 * @return bool true if constants are defined, false otherwise
+	 */
+	public static function are_es_constants_defined() {
+		$endpoints_defined = defined( 'VIP_ELASTICSEARCH_ENDPOINTS' ) && is_array( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) && ! empty( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) );
+		$username_defined  = defined( 'VIP_ELASTICSEARCH_USERNAME' ) && constant( 'VIP_ELASTICSEARCH_USERNAME' );
+		$password_defined  = defined( 'VIP_ELASTICSEARCH_PASSWORD' ) && constant( 'VIP_ELASTICSEARCH_PASSWORD' );
+		return $endpoints_defined && $username_defined && $password_defined;
 	}
 
 	public static function instance() {
-		if ( ! ( static::$_instance instanceof Search ) ) {
-			static::$_instance = new Search();
-			static::$_instance->init();
+		if ( ! ( static::$instance instanceof Search ) ) {
+			static::$instance = new Search();
+			static::$instance->init();
 		}
 
-		return static::$_instance;
+		return static::$instance;
 	}
 
 	protected function load_dependencies() {
@@ -133,6 +244,9 @@ class Search {
 
 		// Load health check cron job
 		require_once __DIR__ . '/class-healthjob.php';
+
+		// Load settings health check cron job
+		require_once __DIR__ . '/class-settingshealthjob.php';
 
 		// Load versioning cleanup job
 		require_once __DIR__ . '/class-versioningcleanupjob.php';
@@ -147,6 +261,12 @@ class Search {
 		require_once __DIR__ . '/class-dashboard.php';
 
 		require_once __DIR__ . '/class-queue.php';
+
+		require_once __DIR__ . '/class-syncmanager-helper.php';
+
+		SyncManager_Helper::instance();
+
+		require_once __DIR__ . '/class-concurrency-limiter.php';
 
 		$this->queue = new Queue();
 		$this->queue->init();
@@ -179,6 +299,10 @@ class Search {
 			$this->logger = new \Automattic\VIP\Logstash\Logger();
 		}
 
+		if ( ! $this->concurrency_limiter ) {
+			$this->concurrency_limiter = new Concurrency_Limiter();
+		}
+
 		/**
 		 * Load CLI commands
 		 */
@@ -196,12 +320,12 @@ class Search {
 
 	public function apply_settings() {
 		/**
-		 * The period with which the Elasticsearch query rate limiting threshold is set.
+		 * The period with which the Elasticsearch query rate-limiting threshold is set.
 		 *
-		 * A set amount of queries are allowed per-period before Elasticsearch query rate limiting occurs.
+		 * A set amount of queries are allowed per-period before Elasticsearch query rate-limiting occurs.
 		 *
 		 * @hook vip_search_ratelimit_period
-		 * @param int $period The period, in seconds, for Elasticsearch query rate limiting checks.
+		 * @param int $period The period, in seconds, for Elasticsearch query rate-limiting checks.
 		 */
 		self::$query_count_ttl = apply_filters( 'vip_search_ratelimit_period', self::DEFAULT_QUERY_COUNT_TTL );
 
@@ -238,7 +362,7 @@ class Search {
 		}
 
 		/**
-		 * The number of queries allowed per period before Elasticsearch rate limiting takes effect.
+		 * The number of queries allowed per period before Elasticsearch rate-limiting takes effect.
 		 *
 		 * Ratelimiting works by sending a percentage of traffic to the database rather than Elasticsearch to keep the cluster stable.
 		 *
@@ -284,12 +408,12 @@ class Search {
 		}
 
 		/**
-		 * The chance of an individual request being sent to the database when Elasticsearch queries are rate limited.
+		 * The chance of an individual request being sent to the database when Elasticsearch queries are rate-limited.
 		 *
 		 * This value is compared >= rand( 1, 10 ) so a setting of 5 would cause roughly half of requests to go to the database. A setting of 3 would yield a 70% chance of going to the database.
 		 *
 		 * @hook vip_search_query_db_fallback_value
-		 * @param int $fallback_value The value compared >= rand( 1, 10 ) to determine if a request will go to the database if Elasticsearch query rate limited.
+		 * @param int $fallback_value The value compared >= rand( 1, 10 ) to determine if a request will go to the database if Elasticsearch query rate-limited.
 		 */
 		self::$query_db_fallback_value = apply_filters( 'vip_search_query_db_fallback_value', self::DEFAULT_QUERY_DB_FALLBACK_VALUE );
 
@@ -315,6 +439,9 @@ class Search {
 			// Set to default rather than to one of the bounds since this setting has serious performance and user impact.
 			self::$query_db_fallback_value = self::DEFAULT_QUERY_DB_FALLBACK_VALUE;
 		}
+
+		// Disable toggling indexing option in multisite admin UI.
+		add_filter( 'ep_show_indexing_option_on_multisite', '__return_false' );
 	}
 
 	protected function setup_constants() {
@@ -323,15 +450,15 @@ class Search {
 			define( 'EP_SYNC_CHUNK_LIMIT', 500 );
 		}
 
-		if ( ! defined( 'EP_HOST' ) && defined( 'VIP_ELASTICSEARCH_ENDPOINTS' ) && is_array( VIP_ELASTICSEARCH_ENDPOINTS ) ) {
-			$host = $this->get_random_host( VIP_ELASTICSEARCH_ENDPOINTS );
-			$this->current_host_index = array_search( $host, VIP_ELASTICSEARCH_ENDPOINTS );
+		if ( ! defined( 'EP_HOST' ) && defined( 'VIP_ELASTICSEARCH_ENDPOINTS' ) && is_array( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) ) {
+			$host                     = $this->get_random_host( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) );
+			$this->current_host_index = array_search( $host, constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) );
 
 			define( 'EP_HOST', $host );
 		}
 
 		if ( ! defined( 'ES_SHIELD' ) && ( defined( 'VIP_ELASTICSEARCH_USERNAME' ) && defined( 'VIP_ELASTICSEARCH_PASSWORD' ) ) ) {
-			define( 'ES_SHIELD', sprintf( '%s:%s', VIP_ELASTICSEARCH_USERNAME, VIP_ELASTICSEARCH_PASSWORD ) );
+			define( 'ES_SHIELD', sprintf( '%s:%s', constant( 'VIP_ELASTICSEARCH_USERNAME' ), constant( 'VIP_ELASTICSEARCH_PASSWORD' ) ) );
 		}
 
 		// Do not allow sync via Dashboard (WP-CLI is preferred for indexing).
@@ -361,10 +488,11 @@ class Search {
 	}
 
 	/**
-	 * Check if query monitor or debug bar are enabled. If so, define WP_EP_DEBUG as true so ElasticPress enables query logging and then load the ElasticPress debug bar panel.
+	 * Check if query monitor or debug bar are enabled. Also check for the debug mode being enabled.
+	 * If so, define WP_EP_DEBUG as true so ElasticPress enables query logging and then load the ElasticPress debug bar panel.
 	 */
 	public function enable_ep_query_logging_if_debug_bar_or_query_monitor_enabled() {
-		if ( apply_filters( 'debug_bar_enable', false ) || apply_filters( 'wpcom_vip_qm_enable', false ) ) {
+		if ( apply_filters( 'debug_bar_enable', false ) || apply_filters( 'wpcom_vip_qm_enable', false ) || ( function_exists( 'is_debug_mode_enabled' ) && is_debug_mode_enabled() ) ) {
 			if ( ! defined( 'WP_EP_DEBUG' ) ) {
 				define( 'WP_EP_DEBUG', true );
 			}
@@ -380,6 +508,8 @@ class Search {
 	protected function setup_hooks() {
 		add_action( 'plugins_loaded', [ $this, 'action__plugins_loaded' ] );
 
+		add_action( 'init', [ $this, 'action__init' ] );
+
 		add_filter( 'ep_index_name', [ $this, 'filter__ep_index_name' ], PHP_INT_MAX, 3 ); // We want to enforce the naming, so run this really late.
 		add_filter( 'ep_global_alias', [ $this, 'filter__ep_global_alias' ], PHP_INT_MAX, 2 );
 
@@ -388,66 +518,61 @@ class Search {
 
 		// Network layer replacement to use VIP helpers (that handle slow/down upstream server)
 		add_filter( 'ep_intercept_remote_request', '__return_true', 9999 );
-		add_filter( 'ep_do_intercept_request', [ $this, 'filter__ep_do_intercept_request' ], 9999, 4 );
+		add_filter( 'ep_do_intercept_request', [ $this, 'filter__ep_do_intercept_request' ], 9999, 5 );
 
 		// Disable query integration by default
 		add_filter( 'ep_skip_query_integration', array( __CLASS__, 'ep_skip_query_integration' ), 5, 2 );
 		add_filter( 'ep_skip_user_query_integration', array( __CLASS__, 'ep_skip_query_integration' ), 5 );
-		// Rate limit query integration
-		add_filter( 'ep_skip_query_integration', array( $this, 'rate_limit_ep_query_integration' ), PHP_INT_MAX );
+
+		// Rate-limit query integration
+		add_filter( 'ep_skip_query_integration', [ $this, 'rate_limit_ep_query_integration' ], PHP_INT_MAX );
 
 		// Disable certain EP Features
 		add_filter( 'ep_feature_active', array( $this, 'filter__ep_feature_active' ), PHP_INT_MAX, 3 );
 
 		// Round-robin retry hosts if connection to a host fails
-		add_filter( 'ep_pre_request_host', array( $this, 'filter__ep_pre_request_host' ), PHP_INT_MAX, 4 );
+		add_filter( 'ep_pre_request_host', array( $this, 'filter__ep_pre_request_host' ), PHP_INT_MAX, 2 );
 
-		add_filter( 'ep_valid_response', array( $this, 'filter__ep_valid_response' ), 10, 4 );
+		add_filter( 'ep_valid_response', array( $this, 'filter__ep_valid_response' ) );
 
 		// Allow querying while a bulk index is running
 		add_filter( 'ep_enable_query_integration_during_indexing', '__return_true' );
 
 		// Set facet taxonomies size. Shouldn't currently be used, but it makes sense to have it set to a sensible
 		// default just in case it ends up in use so that the application doesn't error
-		add_filter( 'ep_facet_taxonomies_size', array( $this, 'filter__ep_facet_taxonomies_size' ), 10, 2 );
+		add_filter( 'ep_facet_taxonomies_size', array( $this, 'filter__ep_facet_taxonomies_size' ) );
 
 		// Disable facet queries
 		add_filter( 'ep_facet_include_taxonomies', '__return_empty_array' );
 
 		// Enable track_total_hits for all queries for proper result sets if track_total_hits isn't already set
+		// Adjust the post query ES arguments (the whole payload)
 		add_filter( 'ep_post_formatted_args', array( $this, 'filter__ep_post_formatted_args' ), 10, 3 );
-
-		// Early hook for modifying behavior of main query
-		add_action( 'wp', array( $this, 'action__wp' ) );
 
 		// Disable query fuzziness by default
 		add_filter( 'ep_fuzziness_arg', '__return_zero', 0 );
 
-		// Replace base 'should' with 'must' in Elasticsearch query if formatted args structure matches what's expected
-		add_filter( 'ep_formatted_args', array( $this, 'filter__ep_formatted_args' ), 0, 2 );
-
 		// Disable indexing of filtered content by default, as it's not searched by default
 		add_filter( 'ep_allow_post_content_filtered_index', '__return_false' );
-
-		// Better shard counts
-		add_filter( 'ep_default_index_number_of_shards', array( $this, 'filter__ep_default_index_number_of_shards' ) );
 
 		// Better replica counts
 		add_filter( 'ep_default_index_number_of_replicas', array( $this, 'filter__ep_default_index_number_of_replicas' ) );
 
 		// Date relevancy defaults. Taken from Jetpack Search.
 		// Set to 'gauss'
-		add_filter( 'epwr_decay_function', array( $this, 'filter__epwr_decay_function' ), 0, 3 );
+		add_filter( 'epwr_decay_function', array( $this, 'filter__epwr_decay_function' ), 0 );
 		// Set to '360d'
-		add_filter( 'epwr_scale', array( $this, 'filter__epwr_scale' ), 0, 3 );
+		add_filter( 'epwr_scale', array( $this, 'filter__epwr_scale' ), 0 );
 		// Set to .9
-		add_filter( 'epwr_decay', array( $this, 'filter__epwr_decay' ), 0, 3 );
+		add_filter( 'epwr_decay', array( $this, 'filter__epwr_decay' ), 0 );
 		// Set to '0d'
-		add_filter( 'epwr_offset', array( $this, 'filter__epwr_offset' ), 0, 3 );
+		add_filter( 'epwr_offset', array( $this, 'filter__epwr_offset' ), 0 );
 		// Set to 'multiply'
-		add_filter( 'epwr_score_mode', array( $this, 'filter__epwr_score_mode' ), 0, 3 );
+		add_filter( 'epwr_score_mode', array( $this, 'filter__epwr_score_mode' ), 0 );
 		// Set to 'multiply'
-		add_filter( 'epwr_boost_mode', array( $this, 'filter__epwr_boost_mode' ), 0, 3 );
+		add_filter( 'epwr_boost_mode', array( $this, 'filter__epwr_boost_mode' ), 0 );
+		// Set to 0.001
+		add_filter( 'epwr_weight', array( $this, 'filter__epwr_weight' ), 0 );
 
 		//	Reduce existing filters based on post meta allow list and make sure the maximum field count is respected
 		add_filter( 'ep_prepare_meta_data', array( $this, 'filter__ep_prepare_meta_data' ), PHP_INT_MAX, 2 );
@@ -462,7 +587,7 @@ class Search {
 		add_filter( 'ep_total_field_limit', array( $this, 'limit_field_limit' ), PHP_INT_MAX );
 
 		// Check if meta is on allow list. If not, don't re-index
-		add_filter( 'ep_skip_post_meta_sync', array( $this, 'filter__ep_skip_post_meta_sync' ), PHP_INT_MAX, 5 );
+		add_filter( 'ep_skip_post_meta_sync', array( $this, 'filter__ep_skip_post_meta_sync' ), PHP_INT_MAX, 4 );
 
 		// Override value of ep_prepare_meta_allowed_protected_keys with the value of vip_search_post_meta_allow_list
 		add_filter( 'ep_prepare_meta_allowed_protected_keys', array( $this, 'filter__ep_prepare_meta_allowed_protected_keys' ), PHP_INT_MAX, 2 );
@@ -472,6 +597,14 @@ class Search {
 		add_filter( 'ep_post_mapping', array( $this, 'filter__ep_indexable_mapping' ) );
 		add_filter( 'ep_term_mapping', array( $this, 'filter__ep_indexable_mapping' ) );
 		add_filter( 'ep_user_mapping', array( $this, 'filter__ep_indexable_mapping' ) );
+
+		// Better shard counts
+		add_filter( 'ep_default_index_number_of_shards', array( $this, 'filter__ep_default_index_number_of_shards' ) );
+		if ( defined( 'VIP_GO_ENV' ) && 'production' === constant( 'VIP_GO_ENV' ) ) {
+			// Only adjust shard count for production environments.
+			add_filter( 'ep_post_mapping', array( $this, 'filter__ep_post_mapping' ) );
+			add_filter( 'ep_user_mapping', array( $this, 'filter__ep_user_mapping' ) );
+		}
 
 		// Do not show the above compat notice since VIP Search will support whatever Elasticsearch version we're running
 		add_filter( 'pre_option_ep_hide_es_above_compat_notice', '__return_true' );
@@ -494,6 +627,31 @@ class Search {
 		add_filter( 'ep_max_results_window', [ $this, 'limit_max_result_window' ], PHP_INT_MAX );
 
 		add_action( 'after_setup_theme', array( $this, 'apply_settings' ), PHP_INT_MAX ); // Try to apply Search settings after other actions in this hook.
+
+		// Lock search algorithm to 3.5
+		add_filter( 'ep_search_algorithm_version', [ $this, 'filter__ep_search_algorithm_version' ] );
+
+		add_filter( 'ep_post_tax_excluded_wp_query_root_check', [ $this, 'exclude_es_query_reserved_names' ] );
+
+		add_filter( 'ep_sync_indexable_kill', [ $this, 'do_not_sync_if_no_index' ], PHP_INT_MAX, 2 );
+
+		// Store last processed id into option and clean up before & after indexing command
+		add_action( 'ep_cli_post_bulk_index', [ $this, 'update_last_processed_post_id_option' ], 10, 2 );
+		add_action( 'ep_wp_cli_after_index', [ $this, 'delete_last_processed_post_id_option' ] );
+		add_action( 'ep_wp_cli_pre_index', [ $this, 'delete_last_processed_post_id_option' ] );
+
+		// Use default ES version as fallback
+		add_filter( 'ep_elasticsearch_version', [ $this, 'fallback_elasticsearch_version' ], PHP_INT_MAX, 1 );
+
+		add_filter( 'ep_es_info_cache_expiration', [ $this, 'filter__es_info_cache_expiration' ], PHP_INT_MAX, 1 );
+
+		// Since we disable UI toggling, blog option should be dependent on index existing (since it defaults to 'yes' if not found)
+		add_filter( 'blog_option_ep_indexable', [ $this, 'filter__blog_option_ep_indexable' ], PHP_INT_MAX, 2 );
+
+		add_filter( 'ep_enable_do_weighting', [ $this, 'filter__ep_enable_do_weighting' ], 9999, 4 );
+
+		add_action( 'publish_ep-pointer', [ $this, 'set_custom_results_existence_cache' ], PHP_INT_MAX, 3 );
+		add_action( 'trash_ep-pointer', [ $this, 'set_custom_results_existence_cache' ], PHP_INT_MAX, 3 );
 	}
 
 	protected function load_commands() {
@@ -506,22 +664,19 @@ class Search {
 		}
 	}
 
-	protected function setup_cron_jobs() {
-		$this->healthcheck = new HealthJob( $this );
-		$this->versioning_cleanup = new VersioningCleanupJob( $this->indexables, $this->versioning );
+	/**
+	 * Setup the needed cron jobs (this fires in WP_CLI context)
+	 *
+	 * @return void
+	 */
+	public function setup_cron_jobs() {
+		$this->healthcheck          = new HealthJob( $this );
+		$this->settings_healthcheck = new SettingsHealthJob( $this );
+		$this->versioning_cleanup   = new VersioningCleanupJob( $this->indexables, $this->versioning );
 
-		/**
-		 * Hook into admin_init action to ensure cron-control has already been loaded.
-		 *
-		 * Hook into wp_loaded in WPCLI contexts.
-		 */
-		if ( defined( 'WP_CLI' ) && \WP_CLI ) {
-			add_action( 'wp_loaded', [ $this->healthcheck, 'init' ], 0 );
-			add_action( 'wp_loaded', [ $this->versioning_cleanup, 'init' ], 0 );
-		} else {
-			add_action( 'admin_init', [ $this->healthcheck, 'init' ], 0 );
-			add_action( 'admin_init', [ $this->versioning_cleanup, 'init' ], 0 );
-		}
+		add_action( 'wp_loaded', [ $this->healthcheck, 'init' ], 0 );
+		add_action( 'wp_loaded', [ $this->settings_healthcheck, 'init' ], 0 );
+		add_action( 'wp_loaded', [ $this->versioning_cleanup, 'init' ], 0 );
 	}
 
 	protected function setup_regular_stat_collection() {
@@ -575,15 +730,8 @@ class Search {
 
 	public function action__plugins_loaded() {
 		$this->maybe_load_es_wp_query();
-	}
 
-	public function action__wp() {
-		global $wp_query;
-
-		// Avoid infinite loops because our requests load the URL with this param.
-		if ( isset( $_GET[ self::QUERY_INTEGRATION_FORCE_ENABLE_KEY ] ) ) {
-			return;
-		}
+		$this->maybe_change_index_version();
 	}
 
 	public function maybe_load_es_wp_query() {
@@ -629,7 +777,7 @@ class Search {
 	/**
 	 * Filter ElasticPress index name if using VIP ES infrastructure
 	 */
-	public function filter__ep_index_name( $index_name, $blog_id, $indexable ) {
+	public function filter__ep_index_name( $_index_name, $blog_id, $indexable ) {
 		// TODO: Use FILES_CLIENT_SITE_ID for now as VIP_GO_ENV_ID is not ready yet. Should replace once it is.
 		$index_name = sprintf( 'vip-%s-%s', FILES_CLIENT_SITE_ID, $indexable->slug );
 
@@ -652,9 +800,7 @@ class Search {
 	 */
 	public function filter__ep_global_alias( $alias_name, $indexable ) {
 		// TODO: Use FILES_CLIENT_SITE_ID for now as VIP_GO_ENV_ID is not ready yet. Should replace once it is.
-		$alias_name = sprintf( 'vip-%s-%s-all', FILES_CLIENT_SITE_ID, $indexable->slug );
-
-		return $alias_name;
+		return sprintf( 'vip-%s-%s-all', FILES_CLIENT_SITE_ID, $indexable->slug );
 	}
 
 	/**
@@ -664,53 +810,172 @@ class Search {
 		return 500;
 	}
 
-	public function filter__ep_do_intercept_request( $request, $query, $args, $failures ) {
+	/**
+	 * Generate option name for caching index_exists requests
+	 *
+	 * @param  string $index_name  Index name
+	 * @return string $option_name Name of generated option
+	 */
+	private function get_index_exists_option_name( $index_name ) {
+		return "es_index_exists_{$index_name}";
+	}
+
+	/**
+	 * Filter to intercept EP remote requests.
+	 *
+	 * @param  array|WP_Error $request  New remote request response
+	 * @param  array  $query    Remote request arguments
+	 * @param  array  $args     Request arguments
+	 * @param  array  $failures Number of failures
+	 * @param  string $type     Type of request
+	 * @return array  $request  New request
+	 */
+	public function filter__ep_do_intercept_request( $request, $query, $args, $failures = 0, $type = null ) {
+		if ( is_wp_error( $request ) && ( 503 === $request->get_error_code() || 429 === $request->get_error_code() ) ) {
+			return $request;
+		}
+
+		$index_exists_invalidation_actions = [
+			'delete_index',
+			'refresh_indices',
+			'put_mapping',
+			'bulk_index',
+		];
+		$valid_index_exists_response_codes = [ 200, 404 ];
+		if ( 'index_exists' === $type || in_array( $type, $index_exists_invalidation_actions, true ) ) {
+			$index_name                  = $this->get_index_name_for_url( $query['url'] );
+			$index_exists_option_name    = $this->get_index_exists_option_name( $index_name );
+			$cached_index_exists_request = get_site_option( $index_exists_option_name );
+			if ( false !== $cached_index_exists_request ) {
+				$cached_index_exists_response_code = (int) wp_remote_retrieve_response_code( $cached_index_exists_request );
+				if ( 'index_exists' === $type && in_array( $cached_index_exists_response_code, $valid_index_exists_response_codes, true ) ) {
+					// Return cached index_exists option.
+					return $cached_index_exists_request;
+				} else {
+					// Invalidate index_exists caching on certain actions.
+					delete_site_option( $index_exists_option_name );
+
+					// Ensure the cache for the option was actually deleted.
+					if ( false !== wp_cache_get( $index_exists_option_name, 'options' ) ) {
+						wp_cache_delete( $index_exists_option_name, 'options' );
+					}
+				}
+			}
+		}
+
 		// Add custom headers to identify authorized traffic
 		if ( ! isset( $args['headers'] ) || ! is_array( $args['headers'] ) ) {
 			$args['headers'] = [];
+		}
+
+		// See https://www.elastic.co/guide/en/elasticsearch/reference/7.17/api-conventions.html#x-opaque-id
+		$x_opaque_id = FILES_CLIENT_SITE_ID;
+		if ( null !== $type ) {
+			$x_opaque_id .= "_{$type}";
+		}
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			$x_opaque_id .= '_cli';
 		}
 
 		$args['headers'] = array_merge(
 			$args['headers'],
 			[
 				'X-Client-Site-ID' => FILES_CLIENT_SITE_ID,
-				'X-Client-Env' => VIP_GO_ENV,
-				'Accept-Encoding' => 'gzip, deflate',
+				'X-Client-Env'     => VIP_GO_ENV,
+				'Accept-Encoding'  => 'gzip, deflate',
+				'X-Opaque-Id'      => $x_opaque_id,
 			]
 		);
 
-		$statsd_mode = $this->get_statsd_request_mode_for_request( $query['url'], $args );
+		// These are the headers we should pass to better identify the request.
+		$rq_headers = [
+			'X-Forwarded-For',
+			'True-Client-IP',
+			'X-Request-Id',
+			'User-Agent',
+		];
+
+		$allheaders = function_exists( 'getallheaders' ) ? getallheaders() : [];
+
+		foreach ( $rq_headers as $rq_header ) {
+			if ( ! isset( $allheaders[ $rq_header ] ) ) {
+				continue;
+			}
+
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+			$args['headers'][ $rq_header ] = $allheaders[ $rq_header ];
+		}
+
+		$statsd_mode            = $this->get_statsd_request_mode_for_request( $query['url'], $args );
 		$collect_per_doc_metric = $this->is_bulk_url( $query['url'] );
-		$statsd_prefix = $this->get_statsd_prefix( $query['url'], $statsd_mode );
+		$statsd_prefix          = $this->get_statsd_prefix( $query['url'], $statsd_mode );
+
+		// Cache handling
+		$is_cacheable    = $this->is_url_query_cacheable( $query['url'], $args );
+		$cached_response = false;
+
+		if ( $is_cacheable ) {
+			// Some requests may not have body
+			$body      = $args['body'] ?? '';
+			$cache_key = 'es_query_cache:' . md5( $query['url'] . $body ) . ':' . wp_cache_get_last_changed( self::SEARCH_CACHE_GROUP );
+			/**
+			 * Serve cached response right away, if available
+			 */
+			$cached_response = wp_cache_get( $cache_key, self::SEARCH_CACHE_GROUP );
+
+			if ( $cached_response ) {
+				return $cached_response;
+			}
+		}
 
 		$start_time = microtime( true );
 
 		$timeout = $this->get_http_timeout_for_query( $query, $args );
 
-		$response = vip_safe_wp_remote_request( $query['url'], false, 3, $timeout, 20, $args );
+		/**
+		 * Skip vip_safe_wp_remote_request for non-query (search) requests
+		 * Any timeouts happening in non-search/non-query context shouldn't count towards the request disabling threshold.
+		 */
+		if ( 'query' === $type ) {
+			$response = vip_safe_wp_remote_request( $query['url'], false, 5, $timeout, 10, $args );
+			self::query_count_incr();
+		} else {
+			$args['timeout'] = $timeout;
+			$response        = wp_remote_request( $query['url'], $args );
+		}
 
 		$end_time = microtime( true );
 		$duration = ( $end_time - $start_time ) * 1000;
 
 		$this->maybe_increment_stat( $statsd_prefix . '.total' );
+		Prometheus_Collector::increment_query_counter( $args['method'] ?? 'post', $query['url'] );
 
 		$response_code = (int) wp_remote_retrieve_response_code( $response );
 
+		/**
+		 * If request resulted in an error flag it as such but try to return the fallback value if available.
+		 */
 		if ( is_wp_error( $response ) || $response_code >= 400 ) {
-			$this->ep_handle_failed_request( $response, $query, $statsd_prefix );
+			$this->ep_handle_failed_request( $request, $response, $query, $statsd_prefix, $type, $cached_response, $args['method'] ?? 'post' );
+			if ( isset( $cached_response['response'] ) ) {
+				return $cached_response['response'];
+			}
 		} else {
 			// Record engine time (have to parse JSON to get it)
 			$response_body_json = wp_remote_retrieve_body( $response );
-			$response_body = json_decode( $response_body_json, true );
+			$response_body      = json_decode( $response_body_json, true );
 
 			if ( $response_body && isset( $response_body['took'] ) && is_int( $response_body['took'] ) ) {
 				$this->maybe_send_timing_stat( $statsd_prefix . '.engine', $response_body['took'] );
+				Prometheus_Collector::observe_request_time( $args['method'] ?? 'post', $query['url'], Prometheus_Collector::OBSERVATION_TYPE_ENGINE, (float) $response_body['took'] );
 			}
 			$this->maybe_send_timing_stat( $statsd_prefix . '.total', $duration );
+			Prometheus_Collector::observe_request_time( $args['method'] ?? 'post', $query['url'], Prometheus_Collector::OBSERVATION_TYPE_REQUEST, (float) $duration );
 
 			if ( $collect_per_doc_metric && $response_body && isset( $response_body['items'] ) && is_array( $response_body['items'] ) ) {
 				$doc_count = count( $response_body['items'] );
 				$this->maybe_send_timing_stat( $statsd_prefix . '.per_doc', $duration / $doc_count );
+				Prometheus_Collector::observe_request_time( $args['method'] ?? 'post', $query['url'], Prometheus_Collector::OBSERVATION_TYPE_PER_DOC, (float) $duration / $doc_count );
 			}
 
 			$response_headers = wp_remote_retrieve_headers( $response );
@@ -722,15 +987,18 @@ class Search {
 					$warning_messages = array( $warning_messages );
 				}
 
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_wp_debug_backtrace_summary
+				$backtrace       = wp_debug_backtrace_summary();
+				$sanitized_query = $this->sanitize_ep_query_for_logging( $query );
 				foreach ( $warning_messages as $message ) {
 					trigger_error( esc_html( $message ), \E_USER_WARNING );
 					\Automattic\VIP\Logstash\log2logstash( array(
 						'severity' => 'warning',
-						'feature' => 'vip_search_es_warning',
-						'message' => $message,
-						'extra' => [
-							'query' => $query,
-							'backtrace' => wp_debug_backtrace_summary(),
+						'feature'  => 'search_es_warning',
+						'message'  => $message,
+						'extra'    => [
+							'query'     => $sanitized_query,
+							'backtrace' => $backtrace,
 						],
 					) );
 				}
@@ -740,66 +1008,162 @@ class Search {
 		if ( is_wp_error( $response ) ) {
 			// Return a generic VIP Search WP_Error instead of the one from wp_remote_request
 			return new \WP_Error( 'vip-search-upstream-request-failed', 'There was an error connecting to the upstream search server' );
-		} else {
-			return $response;
 		}
+
+		if ( 'index_exists' === $type && in_array( $response_code, $valid_index_exists_response_codes, true ) ) {
+			// Cache index_exists into option since we didn't return a cached value earlier.
+			add_site_option( $index_exists_option_name, $response );
+		}
+
+		if ( $is_cacheable ) {
+			// phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
+			wp_cache_set( $cache_key, $response, self::SEARCH_CACHE_GROUP, 5 * MINUTE_IN_SECONDS );
+		}
+
+		return $response;
 	}
 
-	public function ep_handle_failed_request( $response, $query, $statsd_prefix ) {
-		$response_error = [];
+	/**
+	 * Check whether this particular ES query response can be cached.
+	 *
+	 * @param string $url
+	 * @return boolean
+	 */
+	public function is_url_query_cacheable( string $url, $args ): bool {
+		$is_cacheable = false;
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( isset( $_GET['vip-debug'] ) && 'true' === $_GET['vip-debug'] ) {
+			return $is_cacheable;
+		}
+
+		$is_cacheable = boolval( preg_match( '#/_(search|mget|doc)#', $url ) ) && ! in_array( $args['method'], [ 'DELETE', 'PUT' ], true );
+
+
+		/**
+		 * Filter if request is cacheable
+		 *
+		 * @hook vip_search_cache_es_response
+		 *
+		 * @param  $url  Remote request URL
+		 * @param  $args Remote request arguments
+		 * @return $is_cacheable bool New cacheable status
+		 */
+		return apply_filters( 'vip_search_cache_es_response', $is_cacheable, $url, $args );
+	}
+
+	/**
+	 * Handle failed requests
+	 *
+	 * @param mixed $request
+	 * @param mixed $response
+	 * @param array $query
+	 * @param string $statsd_prefix
+	 * @param string $type
+	 * @param mixed $cached_request
+	 * @param string $query_method
+	 * @return void
+	 */
+	public function ep_handle_failed_request( $request, $response, $query, $statsd_prefix, $type, $cached_request, $query_method ) {
+		// Not real failed requests, we should not be logging.
+		$skiplist = [
+			'index_exists',
+			'get',
+		];
+		if ( in_array( $type, $skiplist, true ) ) {
+			return;
+		}
+
+		// The error code for  the failed response.
+		$response_failure_code = '';
+
+		$is_cli = defined( 'WP_CLI' ) && WP_CLI;
+
+		if ( is_wp_error( $request ) ) {
+			$encoded_request = $request->get_error_messages();
+		} else {
+			// TODO: Report actual request, once we make sure all its fields are sanitized and publishable
+			$encoded_request = 'Not an error.';
+		}
 
 		if ( is_wp_error( $response ) ) {
-			$error_messages = $response->get_error_messages();
+			$error_messages        = $response->get_error_messages();
+			$response_failure_code = $response->get_error_code();
 
 			foreach ( $error_messages as $error_message ) {
-				$stat = $this->is_curl_timeout( $error_message ) ? '.timeout' : '.error';
+				$stat   = $this->is_curl_timeout( $error_message ) ? '.timeout' : '.error';
+				$reason = $this->is_curl_timeout( $error_message ) ? Prometheus_Collector::QUERY_FAILED_TIMEOUT : Prometheus_Collector::QUERY_FAILED_ERROR;
 
 				$this->maybe_increment_stat( $statsd_prefix . $stat );
+				Prometheus_Collector::increment_failed_query_counter( $query_method, $query['url'], $reason );
 			}
 
-			$this->logger->log(
-				'error',
-				'vip_search_http_error',
-				implode( ';', $error_messages )
-			);
+			$error_message = implode( ';', $error_messages );
+			$error_type    = $cached_request ? 'search_http_error_with_fallback' : 'search_http_error';
 		} else {
 			$response_body_json = wp_remote_retrieve_body( $response );
-			$response_body = json_decode( $response_body_json, true );
-			$response_error = $response_body['error'] ?? [];
+			$response_body      = json_decode( $response_body_json, true );
+			if ( isset( $response_body['error']['reason'] ) ) {
+				$error_message = $response_body['error']['reason'];
+			} else {
+				$response_code    = wp_remote_retrieve_response_code( $response );
+				$response_message = wp_remote_retrieve_response_message( $response );
+				$error_message    = $response_code && ! empty( $response_message ) ?
+				(string) $response_code . ' ' . $response_message : 'Unknown Elasticsearch query error';
+			}
 
 			$this->maybe_increment_stat( $statsd_prefix . '.error' );
+			Prometheus_Collector::increment_failed_query_counter( $query_method, $query['url'] ?? '', Prometheus_Collector::QUERY_FAILED_ERROR );
 
-			$query_for_logging = $this->sanitize_ep_query_for_logging( $query );
-
-			$error_message = $response_error['reason'] ?? 'Unknown Elasticsearch query error';
-			$this->logger->log(
-				'error',
-				'vip_search_query_error',
-				$error_message,
-				[
-					'error_type' => $response_error['type'] ?? 'Unknown error type',
-					'root_cause' => $response_error['root_cause'] ?? null,
-					'query' => $query_for_logging,
-					'backtrace' => wp_debug_backtrace_summary(),
-				]
-			);
+			$error_type = 'search_query_error';
 		}
+
+		// remote_request_disabled is noisy and doesn't necessarily mean that backend is timing out because the request is never made.
+		if ( 'remote_request_disabled' === $response_failure_code ) {
+			return;
+		}
+
+		if ( ! $is_cli ) {
+			global $wp;
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPress.Security.ValidatedSanitizedInput.InputNotValidated
+			$request_url_for_logging = esc_url_raw( add_query_arg( $wp->query_vars, home_url( wp_unslash( $_SERVER['REQUEST_URI'] ) ) ) );
+		}
+		$this->logger->log(
+			'error',
+			$error_type,
+			$error_message,
+			[
+				'error_type' => ! is_wp_error( $response ) && isset( $response_body['error']['type'] ) ? $response_body['error']['type'] : 'Unknown error type',
+				'root_cause' => ! is_wp_error( $response ) && isset( $response_body['error']['root_cause']['reason'] ) ? $response_body['error']['root_cause']['reason'] : null,
+				'query'      => $this->sanitize_ep_query_for_logging( $query ),
+				'backtrace'  => wp_debug_backtrace_summary(),   // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_wp_debug_backtrace_summary
+				'is_cli'     => $is_cli,
+				'request'    => $encoded_request,
+				'response'   => $response_body ?? null,
+				'url'        => $request_url_for_logging ?? null,
+			]
+		);
 	}
 
 	/**
 	 * Given an ElasticPress query object, strip out anything that shouldn't be logged
+	 * Or format parts of the query object to be more readable.
 	 */
 	public function sanitize_ep_query_for_logging( $query ) {
-		if ( ! isset( $query['args']['headers']['Authorization'] ) ) {
-			return $query;
+		if ( isset( $query['args']['headers']['Authorization'] ) ) {
+			$query['args']['headers']['Authorization'] = '<redacted>';
 		}
 
-		$query['args']['headers']['Authorization'] = '<redacted>';
+		// Try to parse the body if possible to make it better readable in the log entry.
+		if ( isset( $query['args']['body'] ) ) {
+			$decoded_body          = json_decode( $query['args']['body'] );
+			$query['args']['body'] = ! json_last_error() ? $decoded_body : $query['args']['body'];
+		}
 
 		return $query;
 	}
 
-	/*
+	/**
 	 * Given an error message, determine if it's from curl error 28(timeout)
 	 */
 	private function is_curl_timeout( $error_message ) {
@@ -807,23 +1171,23 @@ class Search {
 	}
 
 	public function get_http_timeout_for_query( $query, $args ) {
-		$timeout = 2;
+		$is_cli  = defined( 'WP_CLI' ) && WP_CLI;
+		$timeout = $is_cli ? self::GLOBAL_QUERY_TIMEOUT_CLI_SEC : self::GLOBAL_QUERY_TIMEOUT_WEB_SEC;
 
-		$query_path = wp_parse_url( $query[ 'url' ], PHP_URL_PATH );
+		$query_path      = wp_parse_url( $query['url'], PHP_URL_PATH );
 		$is_post_request = false;
 
 		if ( isset( $args['method'] ) && 0 === strcasecmp( 'POST', $args['method'] ) ) {
 			$is_post_request = true;
 		}
 
-		// Bulk index request so increase timeout
-		if ( wp_endswith( $query_path, '_bulk' ) ) {
-			$timeout = 5;
-
-			if ( defined( 'WP_CLI' ) && WP_CLI && $is_post_request ) {
-				$timeout = 30;
-			} elseif ( \is_admin() && $is_post_request ) {
-				$timeout = 15;
+		// Increase timeouts for certain requests
+		if ( $is_post_request ) {
+			$request_types = [ '_bulk', '_open', '_close', '_settings' ];
+			foreach ( $request_types as $type ) {
+				if ( wp_endswith( $query_path, $type ) ) {
+					return 30;
+				}
 			}
 		}
 
@@ -853,14 +1217,15 @@ class Search {
 	 * constant should be set to `true`, which will enable query integration for all requests
 	 */
 	public static function is_query_integration_enabled() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		if ( isset( $_GET[ self::QUERY_INTEGRATION_FORCE_ENABLE_KEY ] ) ) {
 			return true;
 		}
 
 		// Legacy constant name
-		$query_integration_enabled_legacy = defined( 'VIP_ENABLE_ELASTICSEARCH_QUERY_INTEGRATION' ) && true === VIP_ENABLE_ELASTICSEARCH_QUERY_INTEGRATION;
+		$query_integration_enabled_legacy = defined( 'VIP_ENABLE_ELASTICSEARCH_QUERY_INTEGRATION' ) && true === constant( 'VIP_ENABLE_ELASTICSEARCH_QUERY_INTEGRATION' );
 
-		$query_integration_enabled = defined( 'VIP_ENABLE_VIP_SEARCH_QUERY_INTEGRATION' ) && true === VIP_ENABLE_VIP_SEARCH_QUERY_INTEGRATION;
+		$query_integration_enabled = defined( 'VIP_ENABLE_VIP_SEARCH_QUERY_INTEGRATION' ) && true === constant( 'VIP_ENABLE_VIP_SEARCH_QUERY_INTEGRATION' );
 
 		$enabled_by_constant = ( $query_integration_enabled || $query_integration_enabled_legacy );
 
@@ -885,7 +1250,7 @@ class Search {
 	 */
 	public static function is_network_mode() {
 		// NOTE - Not using strict equality check here so that we match EP
-		return defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK;
+		return defined( 'EP_IS_NETWORK' ) && constant( 'EP_IS_NETWORK' );
 	}
 
 	public static function ep_skip_query_integration( $skip, $query = null ) {
@@ -901,22 +1266,6 @@ class Search {
 			return true;
 		}
 
-		// Bypass a bug in EP Facets that causes aggregations to be run on the main query
-		// This is intended to be a temporary workaround until a better fix is made
-		$bypassed_on_main_query_site_ids = [
-			1284,
-			1286,
-		];
-
-		if ( defined( 'VIP_GO_APP_ID' ) ) {
-			if ( in_array( VIP_GO_APP_ID, $bypassed_on_main_query_site_ids, true ) ) {
-				// Prevent integration on non-search main queries (Facets can wrongly enable itself here)
-				if ( $query && $query->is_main_query() && ! $query->is_search() ) {
-					return true;
-				}
-			}
-		}
-
 		$integration_enabled = self::is_query_integration_enabled();
 
 		// The filter is checking if we should _skip_ query integration...so if it's _not_ enabled
@@ -924,11 +1273,11 @@ class Search {
 	}
 
 	/**
-	 * Filter for ep_skip_query_integration that enabled rate limiting. Should be run last
+	 * Filter for ep_skip_query_integration that enabled rate-limiting. Should be run last.
 	 *
 	 * Honor any previous filters that skip query integration. If query integration is
 	 * continuing, check if the query is past the ratelimiting threshold. If it is, send
-	 * roughly half of the queries received to the database and half through ElasticPress.
+	 * defined percentage of the queries to the database and the rest through Elasticsearch.
 	 *
 	 * @param $skip current ep_skip_query_integration value
 	 * @return bool new value of ep_skip_query_integration
@@ -939,9 +1288,8 @@ class Search {
 			return true;
 		}
 
-		// If the query count has exceeded the maximum
-		// only allow half of the queries to use VIP Search
-		if ( self::query_count_incr() > self::$max_query_count ) {
+		// If the query count has exceeded the maximum pass through certain percentage to the database
+		if ( self::get_query_count() > self::$max_query_count ) {
 			// Go first so that cache entries aren't set yet for first occurrence.
 			$this->maybe_log_query_ratelimiting_start();
 
@@ -949,7 +1297,9 @@ class Search {
 
 			$this->maybe_alert_for_prolonged_query_limiting();
 
-			// Should be roughly half over time
+			// $query_db_fallback_value is by default 5, which would result in roughly half offloaded to the db
+			// @see vip_search_query_db_fallback_value filter
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.rand_rand -- rand() is OK, don't need a cryptographically secure value
 			if ( self::$query_db_fallback_value >= rand( 1, 10 ) ) {
 				$this->record_ratelimited_query_stat();
 				return true;
@@ -970,10 +1320,11 @@ class Search {
 
 		$statsd_mode = 'query_ratelimited';
 
-		$url = $this->get_current_host();
+		$url  = $this->get_current_host();
 		$stat = $this->get_statsd_prefix( $url, $statsd_mode );
 
 		$this->maybe_increment_stat( $stat );
+		Prometheus_Collector::increment_ratelimited_query_counter( is_wp_error( $url ) ? 'unknown' : $url );
 	}
 
 	public function maybe_alert_for_average_queue_time() {
@@ -983,21 +1334,32 @@ class Search {
 			return;
 		}
 
-		$average_wait_time = $this->queue->get_average_queue_wait_time();
+		$queue_stats = $this->queue->get_queue_stats();
 
-		if ( $average_wait_time > self::STALE_QUEUE_WAIT_LIMIT ) {
-			$message = sprintf(
-				'Average index queue wait time for application %d - %s is currently %d seconds',
-				FILES_CLIENT_SITE_ID,
-				home_url(),
-				$average_wait_time
-			);
-			$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+		if ( $queue_stats->average_wait_time > self::STALE_QUEUE_WAIT_LIMIT ) {
+			$cached_queue_count = wp_cache_get( 'vip_search_queue_count_alert', 'vip' );
+			if ( false === $cached_queue_count || ( $cached_queue_count && $cached_queue_count <= $queue_stats->queue_count ) ) {
+				// Alert if we don't have a queue count value cached OR if the queue count isn't decreasing.
+				$message = sprintf(
+					'Average index queue wait time for application %d - %s is currently %d seconds. There are %d items in the queue and the oldest item is %d seconds old',
+					FILES_CLIENT_SITE_ID,
+					home_url(),
+					$queue_stats->average_wait_time,
+					$queue_stats->queue_count,
+					$queue_stats->longest_wait_time
+				);
+
+				if ( ! is_wp_error( $this->alerts ) ) {
+					$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+				}
+
+				wp_cache_set( 'vip_search_queue_count_alert', $queue_stats->queue_count, 'vip', 45 * MINUTE_IN_SECONDS );
+			}
 		}
 	}
 
 	public function maybe_alert_for_prolonged_query_limiting() {
-		$query_limiting_start = wp_cache_get( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::QUERY_COUNT_CACHE_GROUP );
+		$query_limiting_start = wp_cache_get( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::SEARCH_CACHE_GROUP );
 
 		if ( false === $query_limiting_start ) {
 			return;
@@ -1010,21 +1372,23 @@ class Search {
 		}
 
 		$message = sprintf(
-			'Application %d - %s has had its Elasticsearch queries rate limited for %d seconds. Half of traffic is diverted to the database when queries are rate limited.',
+			'Application %d - %s has had its Elasticsearch queries rate-limited for %d seconds. Half of traffic is diverted to the database when queries are rate-limited.',
 			FILES_CLIENT_SITE_ID,
 			home_url(),
 			$query_limiting_time
 		);
 
-		$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+		if ( ! is_wp_error( $this->alerts ) ) {
+			$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+		}
 
 		trigger_error( $message, \E_USER_WARNING ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 
 		\Automattic\VIP\Logstash\log2logstash(
 			array(
 				'severity' => 'warning',
-				'feature' => 'vip_search_query_rate_limiting',
-				'message' => $message,
+				'feature'  => 'search_query_rate_limiting',
+				'message'  => $message,
 			)
 		);
 	}
@@ -1048,23 +1412,26 @@ class Search {
 				home_url(),
 				$current_field_count
 			);
-			$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+
+			if ( ! is_wp_error( $this->alerts ) ) {
+				$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+			}
 		}
 	}
 
 	/**
 	 * Get the current field count of an indexable
 	 *
-	 * @param {\ElasticPress\Indexable} $indexable The indexable you want to get the current index field count of
-	 * @return {null|int} The current field count
+	 * @param \ElasticPress\Indexable $indexable The indexable you want to get the current index field count of
+	 * @return null|int The current field count
 	 */
 	public function get_current_field_count( \ElasticPress\Indexable $indexable ) {
-		if ( ! $indexable ) {
-			return;
+		if ( ! $indexable || ! $indexable->index_exists() ) {
+			return null;
 		}
 
 		$index_name = $indexable->get_index_name();
-		$path = "$index_name/_mapping";
+		$path       = "$index_name/_mapping";
 
 		// Send a request to get all current mappings
 		$raw = \ElasticPress\Elasticsearch::factory()->remote_request( $path );
@@ -1074,12 +1441,12 @@ class Search {
 
 		// If JSON wasn't parsed correctly
 		if ( ! is_array( $body ) || empty( $body ) ) {
-			return;
+			return null;
 		}
 
 		// If JSON structure indicates an error
 		if ( array_key_exists( 'error', $body ) ) {
-			return;
+			return null;
 		}
 
 		$fields = array();
@@ -1100,16 +1467,16 @@ class Search {
 	 *
 	 * Return the next host in our enpoint list if it's defined. Otherwise, return the last host.
 	 */
-	public function filter__ep_pre_request_host( $host, $failures, $path, $args ) {
+	public function filter__ep_pre_request_host( $host, $failures ) {
 		if ( ! defined( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) {
 			return $host;
 		}
 
-		if ( ! is_array( VIP_ELASTICSEARCH_ENDPOINTS ) ) {
+		if ( ! is_array( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) ) {
 			return $host;
 		}
 
-		if ( 0 === count( VIP_ELASTICSEARCH_ENDPOINTS ) ) {
+		if ( 0 === count( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) ) {
 			return $host;
 		}
 
@@ -1136,26 +1503,25 @@ class Search {
 		return $hosts[ array_rand( $hosts ) ];
 	}
 
-	public function filter__ep_valid_response( $response, $query, $query_args, $query_object ) {
-		if ( ! headers_sent() ) {
-			/**
-			 * Manually set a header to indicate the search results are from elasticSearch
-			 */
-			if ( isset( $_GET['ep_debug'] ) ) {
-				header( 'X-ElasticPress-Search-Valid-Response: true' );
-			}
+	public function filter__ep_valid_response( $response ) {
+		/*
+		 * Manually set a header to indicate the search results are from elasticSearch
+		 */
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! headers_sent() && isset( $_GET['ep_debug'] ) ) {
+			header( 'X-ElasticPress-Search-Valid-Response: true' );
 		}
 		return $response;
 	}
 
-	/*
+	/**
 	 * Given the current facet taxonomies size and a taxonomy, determine the facet taxonomy size
 	 */
-	public function filter__ep_facet_taxonomies_size( $size, $taxonomy ) {
+	public function filter__ep_facet_taxonomies_size() {
 		return 5;
 	}
 
-	/*
+	/**
 	 * Remove the search module from active Jetpack modules
 	 */
 	public function filter__jetpack_active_modules( $modules ) {
@@ -1168,7 +1534,7 @@ class Search {
 		} ) ); // phpcs:ignore WordPress.WhiteSpace.DisallowInlineTabs.NonIndentTabsUsed
 	}
 
-	/*
+	/**
 	 * Remove the search widget from Jetpack widget include list
 	 */
 	public function filter__jetpack_widgets_to_include( $widgets ) {
@@ -1188,40 +1554,102 @@ class Search {
 		return array_values( $widgets );
 	}
 
-	/*
-	 * Filter for formatted_args in post queries
-	 */ // phpcs:ignore WordPress.WhiteSpace.DisallowInlineTabs.NonIndentTabsUsed
-	public function filter__ep_post_formatted_args( $formatted_args, $query_vars, $query ) {
+	/**
+	 * Filter for formatted_args in post queries (adjust the final query arguments before it gets passed to the request handler)
+	 *
+	 * @param array $formatted_args the prepared query arguments (payload)
+	 * @param array $args query vars
+	 * @param array $wp_query an instance of WP_Query
+	 * @return array
+	 */
+	public function filter__ep_post_formatted_args( $formatted_args, $args, $wp_query ) {
 		// Check if track_total_hits is set
 		// Don't override it if it is
 		if ( ! array_key_exists( 'track_total_hits', $formatted_args ) ) {
 			$formatted_args['track_total_hits'] = true;
 		}
 
+		// Force the timeout for post search queries.
+		$global_timeout = defined( 'WP_CLI' ) && WP_CLI ? self::GLOBAL_QUERY_TIMEOUT_CLI_SEC : self::GLOBAL_QUERY_TIMEOUT_WEB_SEC;
+		if ( ! isset( $formatted_args['timeout'] ) && apply_filters( 'vip_search_force_global_timeout', true ) ) {
+			$formatted_args['timeout'] = sprintf( '%ds', $global_timeout );
+		}
+
 		return $formatted_args;
 	}
 
 	/**
-	 * Set the number of shards in the index settings
+	 * Set the default number of shards in the index settings
+	 *
+	 */
+	public function filter__ep_default_index_number_of_shards() {
+		return 1;
+	}
+
+	/**
+	 * Set the number of shards in the index settings for the post Indexable
 	 *
 	 * NOTE - this can only be changed during index creation, not on an existing index
+	 *
+	 * @param $mapping Mapping
+	 * @return $mapping New Mapping
 	 */
-	public function filter__ep_default_index_number_of_shards( $shards ) {
-		$shards = 1;
+	public function filter__ep_post_mapping( $mapping ) {
+		$indexable = \ElasticPress\Indexables::factory()->get( 'post' );
+		if ( ! $indexable ) {
+			return $mapping;
+		}
+		$types    = $indexable->get_indexable_post_types();
+		$statuses = $indexable->get_indexable_post_status();
 
-		$posts_count = wp_count_posts();
+		$posts_count = 0;
 
-		if ( $posts_count->publish > 1000000 ) {
-			$shards = 4;
+		foreach ( $types as $type ) {
+			$counts = wp_count_posts( $type );
+			foreach ( $counts as $status => $count ) {
+				if ( ! in_array( $status, $statuses, true ) ) {
+					continue;
+				}
+				$posts_count += $count;
+			}
 		}
 
-		return $shards;
+		if ( $posts_count > self::POST_SHARD_THRESHOLD ) {
+			$mapping['settings']['index.number_of_shards'] = 4;
+		}
+
+		// Add slowlog settings
+		$mapping['settings']['index.search.slowlog.threshold.query.warn']   = '1900ms';
+		$mapping['settings']['index.search.slowlog.threshold.query.info']   = '1s';
+		$mapping['settings']['index.search.slowlog.threshold.fetch.warn']   = '800ms';
+		$mapping['settings']['index.indexing.slowlog.threshold.index.warn'] = '4900ms';
+		$mapping['settings']['index.indexing.slowlog.source']               = '1000';
+
+		return $mapping;
+	}
+
+	/**
+	 * Set the number of shards in the index settings for the user Indexable
+	 *
+	 * NOTE - this can only be changed during index creation, not on an existing index
+	 *
+	 * @param $mapping Mapping
+	 * @return $mapping New Mapping
+	 */
+	public function filter__ep_user_mapping( $mapping ) {
+		$users_count = count_users();
+
+		if ( isset( $users_count->total_users ) && ( $users_count->total_users > self::USER_SHARD_THRESHOLD ) ) {
+			$mapping['settings']['index.number_of_shards'] = 4;
+		}
+
+		return $mapping;
 	}
 
 	/**
 	 * Set the number of replicas for the index
 	 */
-	public function filter__ep_default_index_number_of_replicas( $replicas ) {
+	public function filter__ep_default_index_number_of_replicas() {
 		return 1;
 	}
 
@@ -1231,9 +1659,9 @@ class Search {
 	 * Possible modes (matching wp.com) are manage|analyze|status|langdetect|index|delete_query|get|scroll|search
 	 */
 	public function get_statsd_request_mode_for_request( $url, $args ) {
-		$parsed = parse_url( $url );
+		$parsed = wp_parse_url( $url );
 
-		$path = explode( '/', $parsed['path'] );
+		$path   = explode( '/', $parsed['path'] );
 		$method = strtolower( $args['method'] ) ?? 'post';
 
 		// NOTE - Not doing a switch() b/c the meaningful part of URI is not always in same spot
@@ -1263,10 +1691,8 @@ class Search {
 		}
 
 		// Creating new docs
-		if ( '_create' === $path[ count( $path ) - 2 ] ) {
-			if ( 'put' === $method || 'post' === $method ) {
-				return 'index';
-			}
+		if ( '_create' === $path[ count( $path ) - 2 ] && ( 'put' === $method || 'post' === $method ) ) {
+			return 'index';
 		}
 
 		if ( '_doc' === end( $path ) && 'post' === $method ) {
@@ -1288,7 +1714,7 @@ class Search {
 	}
 
 	public function is_bulk_url( string $url ) {
-		$parsed = parse_url( $url );
+		$parsed = wp_parse_url( $url );
 
 		$path = explode( '/', $parsed['path'] );
 
@@ -1296,19 +1722,18 @@ class Search {
 	}
 
 	/**
-	 * Given an ES url, determine the index name of the request for stats purposes
+	 * Given an ES url, determine the index name of the request
 	 */
-	public function get_statsd_index_name_for_url( $url ) {
-		$parsed = parse_url( $url );
+	public function get_index_name_for_url( $url ) {
+		$parsed = wp_parse_url( trim( $url ) );
 
 		$path = explode( '/', trim( $parsed['path'], '/' ) );
 
 		// Index name is _usually_ the first part of the path
 		$index_name = $path[0];
 
-		// If it starts with underscore but isn't "_all", then we didn't detect the index name
-		// and should return null
-		if ( wp_startswith( $index_name, '_' ) && '_all' !== $index_name ) {
+		// If it starts with underscore, then we didn't detect the index name and should return null
+		if ( wp_startswith( $index_name, '_' ) ) {
 			return null;
 		}
 
@@ -1324,12 +1749,12 @@ class Search {
 			'elasticsearch', // Service name
 		);
 
-		$host = parse_url( $url, \PHP_URL_HOST );
-		$port = parse_url( $url, \PHP_URL_PORT );
+		$host = wp_parse_url( $url, \PHP_URL_HOST );
+		$port = wp_parse_url( $url, \PHP_URL_PORT );
 
 		// Assume all host names are in the format es-ha-$dc.vipv2.net
 		$matches = array();
-		if ( preg_match( '/^es-ha[-.](.*)\.vipv2\.net$/', $host, $matches ) ) {
+		if ( preg_match( '/^es-ha[-.](.*)\.vipv2\.net$/', (string) $host, $matches ) ) {
 			$key_parts[] = $matches[1]; // DC of ES node
 			$key_parts[] = 'ha' . $port . '_vipgo'; // HA endpoint e.g. ha9235_vipgo
 		} else {
@@ -1344,84 +1769,69 @@ class Search {
 		return implode( '.', $key_parts );
 	}
 
-	/*
-	 * Filter for formatted_args in queries
-	 */
-	public function filter__ep_formatted_args( $formatted_args, $args ) {
-		// Check for expected structure, ie: this filters first
-		if ( ! isset( $formatted_args['query']['bool']['should'][0]['multi_match'] ) ) {
-			return $formatted_args;
-		}
-
-		if ( defined( 'VIP_GO_APP_ID' ) ) {
-			$allow_exact_search_site_ids = array(
-				1284,
-			);
-
-			// Only allow exact search for whitelisted site ids
-			if ( ! in_array( VIP_GO_APP_ID, $allow_exact_search_site_ids, true ) ) {
-				return $formatted_args;
-			}
-		}
-
-		// Replace base 'should' with 'must' and then remove the 'should' from formatted args
-		$formatted_args['query']['bool']['must'] = $formatted_args['query']['bool']['should'];
-		$formatted_args['query']['bool']['must'][0]['multi_match']['operator'] = 'AND';
-		unset( $formatted_args['query']['bool']['should'] );
-
-		return $formatted_args;
-	}
-
 	public function truncate_search_string_length( &$query ) {
 		if ( $query->is_search() ) {
 			$search = $query->get( 's' );
 
-			$truncated_search = substr( $search, 0, self::MAX_SEARCH_LENGTH );
+			$search_length = ! current_user_can( 'edit_posts' ) ? apply_filters( 'vip_search_char_length', self::DEFAULT_SEARCH_LENGTH ) : self::MAX_SEARCH_LENGTH;
+
+			if ( $search_length > self::MAX_SEARCH_LENGTH ) {
+				$search_length = self::MAX_SEARCH_LENGTH;
+			}
+
+			$truncated_search = substr( $search, 0, $search_length );
 
 			$query->set( 's', $truncated_search );
 		}
 	}
 
-	/*
+	/**
 	 * Filter for setting decay function for date relevancy in ElasticPress
 	 */
-	public function filter__epwr_decay_function( $decay_function, $formatted_args, $args ) {
+	public function filter__epwr_decay_function() {
 		return 'gauss';
 	}
 
-	/*
+	/**
 	 * Filter for setting scale for date relevancy in ElasticPress
 	 */
-	public function filter__epwr_scale( $scale, $formatted_args, $args ) {
+	public function filter__epwr_scale() {
 		return '360d';
 	}
 
-	/*
+	/**
 	 * Filter for setting decay for date relevancy in ElasticPress
 	 */
-	public function filter__epwr_decay( $decay, $formatted_args, $args ) {
+	public function filter__epwr_decay() {
 		return .9;
 	}
 
-	/*
+	/**
 	 * Filter for setting offset for date relevancy in ElasticPress
 	 */
-	public function filter__epwr_offset( $offset, $formatted_args, $args ) {
+	public function filter__epwr_offset() {
 		return '0d';
 	}
 
-	/*
+	/**
 	 * Filter for setting score mode for date relevancy in ElasticPress
 	 */
-	public function filter__epwr_score_mode( $score_mode, $formatted_args, $args ) {
+	public function filter__epwr_score_mode() {
 		return 'multiply';
 	}
 
-	/*
+	/**
 	 * Filter for setting boost mode for date relevancy in ElasticPress
 	 */
-	public function filter__epwr_boost_mode( $boost_mode, $formatted_args, $args ) {
+	public function filter__epwr_boost_mode() {
 		return 'multiply';
+	}
+
+	/**
+	 * Filter for setting weight for date relevancy in ElasticPress
+	 */
+	public function filter__epwr_weight() {
+		return 0.001;
 	}
 
 	/**
@@ -1432,23 +1842,25 @@ class Search {
 	public function get_current_host() {
 		if ( ! defined( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) {
 			if ( defined( 'EP_HOST' ) ) {
-				return EP_HOST;
+				return constant( 'EP_HOST' );
 			}
 
 			return new \WP_Error( 'vip-search-no-host-found', 'No Elasticsearch hosts found' );
 		}
 
-		if ( ! is_array( VIP_ELASTICSEARCH_ENDPOINTS ) ) {
-			return VIP_ELASTICSEARCH_ENDPOINTS;
+		if ( ! is_array( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) ) ) {
+			return constant( 'VIP_ELASTICSEARCH_ENDPOINTS' );
 		}
 
 		if ( ! is_int( $this->current_host_index ) ) {
 			$this->current_host_index = 0;
 		}
 
-		$this->current_host_index = $this->current_host_index % count( VIP_ELASTICSEARCH_ENDPOINTS );
+		$this->current_host_index = $this->current_host_index % count( constant( 'VIP_ELASTICSEARCH_ENDPOINTS' ) );
 
-		return VIP_ELASTICSEARCH_ENDPOINTS[ $this->current_host_index ];
+		$endpoints = constant( 'VIP_ELASTICSEARCH_ENDPOINTS' );
+
+		return $endpoints[ $this->current_host_index ];
 	}
 
 	/**
@@ -1480,10 +1892,8 @@ class Search {
 	 * Filter for reducing post meta for indexing to only the allow list
 	 */
 	public function filter__ep_prepare_meta_data( $current_meta, $post ) {
-		if ( defined( 'FILES_CLIENT_SITE_ID' ) ) {
-			if ( in_array( FILES_CLIENT_SITE_ID, self::DISABLE_POST_META_ALLOW_LIST, true ) ) {
-				return $current_meta;
-			}
+		if ( defined( 'FILES_CLIENT_SITE_ID' ) && in_array( FILES_CLIENT_SITE_ID, self::DISABLE_POST_META_ALLOW_LIST, true ) ) {
+			return $current_meta;
 		}
 
 		if ( ! is_array( $current_meta ) ) {
@@ -1500,12 +1910,10 @@ class Search {
 		$client_post_meta_allow_list_assoc = array_flip( $client_post_meta_allow_list );
 
 		// Only include meta that matches the allow list
-		$new_meta = array_intersect_key( $current_meta, $client_post_meta_allow_list_assoc );
-
-		return $new_meta;
+		return array_intersect_key( $current_meta, $client_post_meta_allow_list_assoc );
 	}
 
-	/*
+	/**
 	 * Hook for WP CLI before_add_command:elasticpress
 	 */
 	public function abort_elasticpress_add_command( $addition ) {
@@ -1534,24 +1942,21 @@ class Search {
 	/**
 	 * Check if meta is on allow list. If it isn't, set ep_skip_post_meta_sync to false
 	 *
-	 * @param {bool} $skip_sync The current value of whether the sync should be skipped or not
-	 * @param {WP_Post} $post The post that's attempting to be reindexed
-	 * @param {int|array} $meta_id Meta id.
-	 * @param {string} $meta_key Meta key.
-	 * @param {string} $meta_value Meta value.
-	 * @return {bool} The new value of whether the sync should be skipped or not
+	 * @param bool $skip_sync The current value of whether the sync should be skipped or not
+	 * @param WP_Post $post The post that's attempting to be reindexed
+	 * @param int|array $meta_id Meta id.
+	 * @param string $meta_key Meta key.
+	 * @return bool The new value of whether the sync should be skipped or not
 	 */
-	public function filter__ep_skip_post_meta_sync( $skip_sync, $post, $meta_id, $meta_key, $meta_value ) {
+	public function filter__ep_skip_post_meta_sync( $skip_sync, $post, $meta_id, $meta_key ) {
 		// Respect previous skip values
 		if ( true === $skip_sync ) {
 			return true;
 		}
 
 		// If post meta allow list is disabled for this site, skip the allow list check
-		if ( defined( 'FILES_CLIENT_SITE_ID' ) ) {
-			if ( in_array( FILES_CLIENT_SITE_ID, self::DISABLE_POST_META_ALLOW_LIST, true ) ) {
-				return $skip_sync;
-			}
+		if ( defined( 'FILES_CLIENT_SITE_ID' ) && in_array( FILES_CLIENT_SITE_ID, self::DISABLE_POST_META_ALLOW_LIST, true ) ) {
+			return $skip_sync;
 		}
 
 		// If post is invalid, respect current sync value
@@ -1589,23 +1994,23 @@ class Search {
 	}
 
 	public function is_jetpack_migration() {
-		return defined( 'VIP_SEARCH_MIGRATION_SOURCE' ) && 'jetpack' === VIP_SEARCH_MIGRATION_SOURCE;
+		return defined( 'VIP_SEARCH_MIGRATION_SOURCE' ) && 'jetpack' === constant( 'VIP_SEARCH_MIGRATION_SOURCE' );
 	}
 
 	/**
 	 * Processes vip_search_post_meta_allow_list. This method handles assoc array conversion if needed.
 	 *
-	 * @param {WP_Post} $post The post whose meta data is being prepared.
-	 * @return {array} The new allow list for post_meta_indexing.
+	 * @param WP_Post $post The post whose meta data is being prepared.
+	 * @return array The new allow list for post_meta_indexing.
 	 */
 	public function get_post_meta_allow_list( $post ) {
 		/**
 		 * Filters the allow list used for post meta indexing
 		 *
 		 * @hook vip_search_post_meta_allow_list
-		 * @param {array} $current_allow_list The current allow list for post meta indexing either as a list of post meta keys or as an associative array( e.g.: array( 'key' => true ); )
-		 * @param {WP_Post} $post The post whose meta data is being prepared
-		 * @return {array} $new_allow_list The new allow list for post_meta_indexing
+		 * @param array $current_allow_list The current allow list for post meta indexing either as a list of post meta keys or as an associative array( e.g.: array( 'key' => true ); )
+		 * @param WP_Post $post The post whose meta data is being prepared
+		 * @return array $new_allow_list The new allow list for post_meta_indexing
 		 */
 		$post_meta_allow_list = \apply_filters( 'vip_search_post_meta_allow_list', [], $post );
 
@@ -1651,6 +2056,12 @@ class Search {
 	 */
 	public function filter__ep_indexable_mapping( $mapping ) {
 		if ( ! is_array( $mapping['settings'] ) ) {
+			// Alert when it is unavailable
+			if ( ! is_wp_error( $this->alerts ) ) {
+				$message = sprintf( 'No settings detected for building mapping on %s: %s', FILES_CLIENT_SITE_ID, home_url() );
+				$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+			}
+
 			return $mapping;
 		}
 
@@ -1659,13 +2070,19 @@ class Search {
 		if ( $origin_datacenter ) {
 			// We want all indexes to live in the site's origin datacenter
 			$mapping['settings']['index.routing.allocation.include.dc'] = $origin_datacenter;
+		} else {
+			// Alert when it is unavailable
+			if ( ! is_wp_error( $this->alerts ) ) {
+				$message = sprintf( 'No origin DC detected for building mapping on %s: %s', FILES_CLIENT_SITE_ID, home_url() );
+				$this->alerts->send_to_chat( self::SEARCH_ALERT_SLACK_CHAT, $message, self::SEARCH_ALERT_LEVEL );
+			}
 		}
 
 		return $mapping;
 	}
 
 	public function get_index_routing_allocation_include_dc() {
-		$dc = defined( 'VIP_ORIGIN_DATACENTER' ) ? VIP_ORIGIN_DATACENTER : $this->get_origin_dc_from_es_endpoint( $this->get_current_host() );
+		$dc = defined( 'VIP_ORIGIN_DATACENTER' ) ? constant( 'VIP_ORIGIN_DATACENTER' ) : $this->get_origin_dc_from_es_endpoint( $this->get_current_host() );
 
 		$dc = strtolower( $dc );
 
@@ -1676,8 +2093,11 @@ class Search {
 		return $dc;
 	}
 
+	/**
+	 * @return string|null
+	 */
 	public function get_origin_dc_from_es_endpoint( $url ) {
-		$dc = null;
+		$dc = '';
 
 		if ( ! $url ) {
 			return null;
@@ -1686,7 +2106,7 @@ class Search {
 		$matches = array();
 
 		// The url from the VIP_ELASTICSEARCH_ENDPOINTS constant can contain a port - so parse out just the hostname
-		$host = parse_url( $url, \PHP_URL_HOST );
+		$host = wp_parse_url( $url, \PHP_URL_HOST );
 
 		if ( preg_match( '/^es-ha\.(.*)\.vipv2\.net$/', $host, $matches ) ) {
 			$dc = $matches[1];
@@ -1717,29 +2137,30 @@ class Search {
 		return $indexable_post_types;
 	}
 
-	/*
+	/**
 	 * Increment the number of queries that have been passed through VIP Search
 	 */
 	private static function query_count_incr() {
-		if ( false === wp_cache_get( self::QUERY_COUNT_CACHE_KEY, self::QUERY_COUNT_CACHE_GROUP ) ) {
-			wp_cache_set( self::QUERY_COUNT_CACHE_KEY, 0, self::QUERY_COUNT_CACHE_GROUP, self::$query_count_ttl );
+		if ( false === wp_cache_get( self::QUERY_COUNT_CACHE_KEY, self::SEARCH_CACHE_GROUP ) ) {
+			// phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
+			wp_cache_set( self::QUERY_COUNT_CACHE_KEY, 0, self::SEARCH_CACHE_GROUP, self::$query_count_ttl );
 		}
 
-		return wp_cache_incr( self::QUERY_COUNT_CACHE_KEY, 1, self::QUERY_COUNT_CACHE_GROUP );
+		return wp_cache_incr( self::QUERY_COUNT_CACHE_KEY, 1, self::SEARCH_CACHE_GROUP );
 	}
 
-	/*
+	/**
 	 * Checks if the query limiting start timestamp is set, set it otherwise\
 	 */
 	public function handle_query_limiting_start_timestamp() {
-		if ( false === wp_cache_get( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::QUERY_COUNT_CACHE_GROUP ) ) {
+		if ( false === wp_cache_get( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::SEARCH_CACHE_GROUP ) ) {
 			$start_timestamp = $this->get_time();
-			wp_cache_set( self::QUERY_RATE_LIMITED_START_CACHE_KEY, $start_timestamp, self::QUERY_COUNT_CACHE_GROUP );
+			wp_cache_set( self::QUERY_RATE_LIMITED_START_CACHE_KEY, $start_timestamp, self::SEARCH_CACHE_GROUP );
 		}
 	}
 
 	public function clear_query_limiting_start_timestamp() {
-		wp_cache_delete( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::QUERY_COUNT_CACHE_GROUP );
+		wp_cache_delete( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::SEARCH_CACHE_GROUP );
 	}
 
 	/**
@@ -1752,6 +2173,7 @@ class Search {
 			return;
 		}
 
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rand_rand -- rand() is OK, don't need a cryptographically secure value
 		if ( self::$stat_sampling_drop_value <= rand( 1, 10 ) ) {
 			return;
 		}
@@ -1774,6 +2196,7 @@ class Search {
 			return;
 		}
 
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rand_rand -- rand() is OK, don't need a cryptographically secure value
 		if ( self::$stat_sampling_drop_value <= rand( 1, 10 ) ) {
 			return;
 		}
@@ -1787,15 +2210,15 @@ class Search {
 	 * When query rate limting first begins, log this information and surface as a PHP warning
 	 */
 	public function maybe_log_query_ratelimiting_start() {
-		if ( false === wp_cache_get( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::QUERY_COUNT_CACHE_GROUP ) ) {
+		if ( false === wp_cache_get( self::QUERY_RATE_LIMITED_START_CACHE_KEY, self::SEARCH_CACHE_GROUP ) ) {
 			$message = sprintf(
-				'Application %d - %s has triggered Elasticsearch query rate limiting, which will last up to %d seconds. Subsequent or repeat occurrences are possible. Half of traffic is diverted to the database when queries are rate limited.',
+				'Application %d - %s has triggered Elasticsearch query rate-limiting, which will last up to %d seconds. Subsequent or repeat occurrences are possible. Half of traffic is diverted to the database when queries are rate-limited.',
 				FILES_CLIENT_SITE_ID,
 				\home_url(),
 				self::$query_count_ttl
 			);
 
-			$this->logger->log( 'warning', 'vip_search_query_rate_limiting', $message );
+			$this->logger->log( 'warning', 'search_query_rate_limiting', $message, [ 'count' => self::get_query_count() ] );
 		}
 	}
 
@@ -1814,5 +2237,271 @@ class Search {
 
 	public function limit_max_result_window( $current_value ) {
 		return min( $current_value, self::MAX_RESULT_WINDOW );
+	}
+
+	/**
+	 * Determine whether the rate-limiting is in effect
+	 */
+	public static function is_rate_limited(): bool {
+		return intval( wp_cache_get( self::QUERY_COUNT_CACHE_KEY, self::SEARCH_CACHE_GROUP ) ) > self::$max_query_count;
+	}
+
+	/**
+	 * Get the total number of queries over the last rate-limiting window from object cache.
+	 *
+	 * @return integer
+	 */
+	public static function get_query_count(): int {
+		return (int) wp_cache_get( self::QUERY_COUNT_CACHE_KEY, self::SEARCH_CACHE_GROUP );
+	}
+
+	/**
+	 * Filter out default algorithm version to be used.
+	 *
+	 * @return string
+	 */
+	public function filter__ep_search_algorithm_version() {
+		if ( defined( 'VIP_GO_APP_ENVIRONMENT' ) && 'production' !== VIP_GO_APP_ENVIRONMENT ) {
+			// Enable new algorithm for non-prods
+			return '4.0';
+		}
+		return '3.5';
+	}
+
+	public function maybe_change_index_version() {
+		$indexables = $this->indexables->get_all();
+
+		foreach ( $indexables as $indexable ) {
+			$query_force_version_argument = sprintf( self::QUERY_FORCE_VERSION_PATTERN, $indexable->slug );
+
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			if ( ! isset( $_GET[ $query_force_version_argument ] ) ) {
+				continue;
+			}
+
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+			$normalized_version = $this->versioning->normalize_version_number( $indexable, $_GET[ $query_force_version_argument ] );
+
+			if ( is_wp_error( $normalized_version ) ) {
+				continue;
+			}
+
+			$this->versioning->set_current_version_number( $indexable, $normalized_version );
+		}
+	}
+
+	public function exclude_es_query_reserved_names( $taxonomies ) {
+		return array_merge( $taxonomies, self::ES_QUERY_RESERVED_NAMES );
+	}
+
+	/**
+	 * Do not sync if index does not exist for Indexable.
+	 *
+	 * @param {boolean} $kill Whether to kill the sync or not.
+	 * @param {string} $indexable_slug Indexable slug.
+	 *
+	 * @return bool
+	 */
+	public function do_not_sync_if_no_index( $kill, $indexable_slug ) {
+		$indexable = \ElasticPress\Indexables::factory()->get( $indexable_slug );
+		if ( $indexable && ! $indexable->index_exists() ) {
+			$kill = true;
+		}
+		return $kill;
+	}
+
+	public function action__init() {
+		remove_action( 'wp_initialize_site', [ \ElasticPress\Indexables::factory()->get( 'post' )->sync_manager, 'action_create_blog_index' ] );
+	}
+
+	/**
+	 * Store last processed post ID into option during bulk indexing operation.
+	 *
+	 * @param array $objects Objects being indexed
+	 * @param array $response Elasticsearch bulk index response
+	 *
+	 * @return void
+	 */
+	public function update_last_processed_post_id_option( $objects, $response ) {
+		update_option( self::LAST_INDEXED_POST_ID_OPTION, array_key_last( $objects ) );
+	}
+
+	/**
+	 * Delete last processed post ID option before & after indexing.
+	 *
+	 * @return void
+	 */
+	public function delete_last_processed_post_id_option() {
+		if ( false !== get_option( self::LAST_INDEXED_POST_ID_OPTION ) ) {
+			delete_option( self::LAST_INDEXED_POST_ID_OPTION );
+		}
+	}
+
+	/**
+	 * Fallback to a default Elasticsearch version string if none is returned.
+	 *
+	 * @param string|bool $version Elasticsearch version
+	 * @return string $version New Elasticsearch version
+	 */
+	public function fallback_elasticsearch_version( $version ) {
+		if ( ! is_string( $version ) ) {
+			$version = self::DEFAULT_ELASTICSEARCH_VERSION;
+		}
+
+		return $version;
+	}
+
+	/**
+	 * Extend default elasticsearch info cache expiration from 5 minutes.
+	 *
+	 * @param int $time Cache time in seconds
+	 * @return int $time New cache time in seconds
+	 */
+	public function filter__es_info_cache_expiration( $time ) {
+		return wp_rand( 24 * HOUR_IN_SECONDS, 36 * HOUR_IN_SECONDS );
+	}
+
+	/**
+	 * A filter that only enables weighting if it is needed. E.g. When weightings are set by UI or filtered.
+	 *
+	 * @param bool  Whether to enable weight config, defaults to true for search requests that are public or REST
+	 * @param array $weight_config Current weight config
+	 * @param array $args WP Query arguments
+	 * @param array $formatted_args Formatted ES arguments
+	 * @return bool $should_do_weighting New value on whether to enable weight config
+	 */
+	public function filter__ep_enable_do_weighting( $should_do_weighting, $weight_config, $args, $formatted_args ) {
+		if ( ! empty( $weight_config ) ) {
+			return $should_do_weighting;
+		}
+
+		$search_ordering_feature = \ElasticPress\Features::factory()->get_registered_feature( 'searchordering' );
+		if ( $search_ordering_feature && $search_ordering_feature->is_active() ) {
+			if ( '1' === $this->get_cached_custom_results_existence() ) {
+				// If Custom Search Results are enabled and exist, we should bail.
+				return $should_do_weighting;
+			}
+
+			if ( isset( $args['exclude_pointers'] ) && true === $args['exclude_pointers'] ) {
+				// For the pointer preview, the search should display with weightings for accuracy.
+				return $should_do_weighting;
+			}
+		}
+
+		global $wp_filter;
+
+		$ep_filters = [
+			'ep_weighting_configuration_for_search',
+			'ep_query_weighting_fields',
+			'ep_weighting_configuration',
+			'ep_weighting_fields_for_post_type',
+		];
+
+		foreach ( $ep_filters as $ep_filter ) {
+			if ( isset( $wp_filter[ $ep_filter ] ) ) {
+				foreach ( $wp_filter[ $ep_filter ]->callbacks as $callback ) {
+					foreach ( $callback as $el ) {
+						if ( $el['function'] instanceof \Closure ) {
+							return $should_do_weighting;
+						} else {
+							$class = get_class( $el['function'][0] );
+							if ( false === strpos( $class, 'ElasticPress\Feature' ) ) {
+								return $should_do_weighting;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * This is used to toggle the option that stores the existence of custom search results.
+	 * Hooks onto {$new_status}_ep-pointer.
+	 *
+	 * @param int $post_id Post ID.
+	 * @param WP_Post $post Post object.
+	 * @param string $old_status Old post status.
+	 */
+	public function set_custom_results_existence_cache( $post_id, $post, $old_status = '' ) {
+		$custom_results_existence = $this->get_cached_custom_results_existence();
+		$option_cache_key         = 'vip_custom_results_existence';
+
+		if ( 'publish' === $post->post_status && '1' !== $custom_results_existence ) {
+			// Only set it to 1 if it's not already 1.
+			update_option( $option_cache_key, '1' );
+		} elseif ( 'trash' === $post->post_status && '1' === $custom_results_existence ) {
+			// If it's trashed, we need to query if there are any more CSRs left and if the option is 1.
+			$custom_results = $this->is_custom_results_exist();
+			if ( ! $custom_results ) {
+				update_option( $option_cache_key, '0' );
+			}
+		}
+	}
+
+	/**
+	 * Return the option that caches the existence of custom search results. If the option does not exist,
+	 * backfill it.
+	 *
+	 * @return string $custom_results_existence String boolean of whether custom search results exist.
+	 */
+	public function get_cached_custom_results_existence() {
+		$option_cache_key         = 'vip_custom_results_existence';
+		$custom_results_existence = get_option( $option_cache_key );
+
+		if ( false === $custom_results_existence ) {
+			$custom_results_existence = $this->is_custom_results_exist() ? '1' : '0';
+			update_option( $option_cache_key, $custom_results_existence );
+		}
+
+		return $custom_results_existence;
+	}
+
+	/**
+	 * Perform a WP_Query lookup to see if Custom Search Results are present.
+	 *
+	 * @return bool $exist If there are any Custom Search Results or not.
+	 */
+	public function is_custom_results_exist() {
+		$args           = [
+			'post_type'           => 'ep-pointer',
+			'post_status'         => 'publish',
+			'fields'              => 'ids',
+			'posts_per_page'      => 1,
+			'no_found_rows'       => true,
+			'ignore_sticky_posts' => true,
+		];
+		$custom_results = new \WP_Query( $args );
+
+		return ! empty( $custom_results->posts );
+	}
+
+	/**
+	 * Since we disable the toggling UI for whether subsites in multisite are indexable, we should filter the
+	 * option based on the index for the subsite ID existing, instead of default value of blog option or what
+	 * is being stored. See \ElasticPress\Utils\is_site_indexable().
+	 *
+	 * @param string $value Whether the ep_indexable option is found for the blog. Defaults to 'yes'.
+	 * @param int $blog_id The blog_id we are checking.
+	 * @return string $value Whether the index exists for the $blog_id.
+	 */
+	public function filter__blog_option_ep_indexable( $value, $blog_id ) {
+		$index_exists = \ElasticPress\Indexables::factory()->get( 'post' )->index_exists( $blog_id );
+		return false === $index_exists ? 'no' : 'yes';
+	}
+
+	public function setup_collector(): void {
+		if ( did_action( 'vip_prometheus_loaded' ) ) {
+			$this->load_collector();
+		} else {
+			add_action( 'vip_prometheus_loaded', [ $this, 'load_collector' ] );
+		}
+	}
+
+	public function load_collector(): void {
+		require_once __DIR__ . '/class-prometheus-collector.php';
+		Prometheus_Collector::get_instance();
 	}
 }

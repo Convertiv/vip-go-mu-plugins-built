@@ -14,7 +14,7 @@ class Image {
 	/** @var string $filename Attachment's Filename. */
 	public $filename;
 
-	/** @var string/WP_Erorr $mime_type Attachment's mime-type, WP_Error on failure when recalculating the dimensions. */
+	/** @var string|\WP_Error $mime_type Attachment's mime-type, WP_Error on failure when recalculating the dimensions. */
 	private $mime_type;
 
 	/** @var int $original_width Image original width. */
@@ -32,6 +32,9 @@ class Image {
 	/** @var bool $is_resized Whether the attachment has been resized yet, or not. */
 	private $is_resized = false;
 
+	/** @var int $filesize Image original filesize */
+	private $filesize;
+
 	/**
 	 * Constructs the image object.
 	 *
@@ -44,10 +47,13 @@ class Image {
 	 * @param string|\WP_Error $mime_type Typically value returned from get_post_mime_type function.
 	 */
 	public function __construct( $data, $mime_type ) {
-		$this->filename = $data['file'];
-		$this->width = $this->original_width = $data['width'];
-		$this->height = $this->original_height = $data['height'];
-		$this->mime_type = $mime_type;
+		$this->filename        = $data['file'];
+		$this->original_width  = $data['width'];
+		$this->original_height = $data['height'];
+		$this->width           = $data['width'];
+		$this->height          = $data['height'];
+		$this->mime_type       = $mime_type;
+		$this->filesize        = isset( $data['filesize'] ) ? $data['filesize'] : 0;
 	}
 
 	/**
@@ -71,7 +77,8 @@ class Image {
 
 		$this->set_width_height( $dimensions );
 
-		return $this->is_resized = true;
+		$this->is_resized = true;
+		return $this->is_resized;
 	}
 
 	/**
@@ -79,7 +86,7 @@ class Image {
 	 *
 	 * @param array $size_data Array of width, height, and crop properties of a size.
 	 *
-	 * @return array|\WP_Error An array containing file, width, height, and mime-type keys and it's values. WP_Error on failure.
+	 * @return array|\WP_Error An array containing file, width, height, filesize, and mime-type keys and it's values. WP_Error on failure.
 	 */
 	public function get_size( $size_data ) {
 
@@ -90,10 +97,11 @@ class Image {
 		}
 
 		return [
-			'file' => $this->get_filename(),
-			'width' => $this->get_width(),
-			'height' => $this->get_height(),
+			'file'      => $this->get_filename(),
+			'width'     => $this->get_width(),
+			'height'    => $this->get_height(),
 			'mime-type' => $this->get_mime_type(),
+			'filesize'  => $this->get_filesize(),
 		];
 	}
 
@@ -103,8 +111,8 @@ class Image {
 	 * @return bool True on successful reset to original dimensions.
 	 */
 	public function reset_to_original() {
-		$this->width = $this->original_width;
-		$this->height = $this->original_height;
+		$this->width      = $this->original_width;
+		$this->height     = $this->original_height;
 		$this->is_resized = false;
 
 		return true;
@@ -155,6 +163,18 @@ class Image {
 	}
 
 	/**
+	 * Returns the images filesize (in bytes).
+	 *
+	 * Since we don't actually create new files for different attachment sizes,
+	 * the filesize on each entry in the attachment sizes array will just be that of the original.
+	 *
+	 * @return int
+	 */
+	public function get_filesize() {
+		return (int) $this->filesize;
+	}
+
+	/**
 	 * Checks the resize status of the image.
 	 *
 	 * @return bool If the image has been resized.
@@ -173,7 +193,7 @@ class Image {
 			'resize' => join( ',', [
 				$this->get_width(),
 				$this->get_height(),
-			] )
+			] ),
 		];
 
 		return add_query_arg( $query_args, $this->filename );
@@ -206,7 +226,7 @@ class Image {
 			'dst_w',
 			'dst_h',
 			'src_w',
-			'src_h'
+			'src_h',
 		], $dimensions );
 	}
 
@@ -216,7 +236,7 @@ class Image {
 	 * @return void
 	 */
 	protected function set_width_height( $dimensions ) {
-		$this->width = (int) $dimensions['dst_w'];
+		$this->width  = (int) $dimensions['dst_w'];
 		$this->height = (int) $dimensions['dst_h'];
 	}
 
